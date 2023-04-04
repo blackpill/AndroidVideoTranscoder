@@ -2,17 +2,17 @@ apply plugin: 'com.android.library'
 apply plugin: 'kotlin-android'
 apply plugin: 'kotlin-android-extensions'
 apply plugin: 'kotlin-kapt'
-apply plugin: 'com.getkeepsafe.dexcount'
+//apply plugin: 'com.getkeepsafe.dexcount'
 
 android {
 
-    compileSdkVersion compileSdkVer
-    buildToolsVersion buildToolsVer
+    compileSdkVersion 33
+    buildToolsVersion "33.0.1"
 
     defaultConfig {
 
         minSdkVersion 18
-        targetSdkVersion targetSdkVer
+        targetSdkVersion 31
         versionCode 1
         versionName "1.0"
 

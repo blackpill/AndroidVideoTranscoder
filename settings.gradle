@@ -1,2 +1,2 @@
 include ':transcoder'
-rootProject.name='transcoder'
+rootProject.name='Video Convert'
