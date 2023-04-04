@@ -66,7 +66,8 @@ class FFmpegActivity : AppCompatActivity() {
         init_ffmpeg.text = "FFmpeg is ${if (FFMpegTranscoder.isSupported(this)) "" else "not"} supported."
 
         val frameFolder = "Download/process/".parseExternalStorageFile()
-        val inputVideo = "Download/walkaround.mp4".parseExternalStorageFile()
+        //val inputVideo = "Download/walkaround.mp4".parseExternalStorageFile()
+        val inputVideo = Uri.parse("http://10.0.2.2/test.mp4")
         val outputVideo = "Download/stabilizedOutput_${System.currentTimeMillis()}.mp4".parseExternalStorageFile()
 
         extractFrames(inputVideo, frameFolder)
@@ -155,8 +156,8 @@ class FFmpegActivity : AppCompatActivity() {
             }
 
 
-            extractByFFMpeg(inputVideo,frameFolder)   //Uri.parse(copyAssetFileToCache("walkaround.mp4")!!.path)
-            //extactByMediaCodec(times, inputVideo, frameFolder)
+            //extractByFFMpeg(inputVideo,frameFolder)   //Uri.parse(copyAssetFileToCache("walkaround.mp4")!!.path)
+            extactByMediaCodec(times, inputVideo, frameFolder)
 
         }
     }
