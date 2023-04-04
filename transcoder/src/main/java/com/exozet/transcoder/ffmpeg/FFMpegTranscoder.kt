@@ -204,7 +204,7 @@ object FFMpegTranscoder {
             val percent = AtomicInteger()
 
             val total = try {
-                File(frameFolder.path).listFiles().size
+                File(frameFolder.path!!).listFiles()?.size
             } catch (e: Exception) {
                 e.printStackTrace()
                 0
@@ -275,7 +275,7 @@ object FFMpegTranscoder {
             }.toTypedArray()
 
             Config.enableStatisticsCallback { newStatistics ->
-                percent.set(ceil((100.0 * newStatistics.videoFrameNumber / total)).coerceIn(0.0, 100.0).toInt())
+                percent.set(ceil((100.0 * newStatistics.videoFrameNumber / total!!)).coerceIn(0.0, 100.0).toInt())
                 emitter.onNext(Progress(uri = outputUri, message = "", progress = percent.get(), duration = System.currentTimeMillis() - startTime))
             }
             Config.enableLogCallback {
