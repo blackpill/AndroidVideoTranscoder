@@ -25,6 +25,7 @@ import com.exozet.transcoder.ffmpeg.Progress
 import com.exozet.transcoder.ffmpeg.log
 import io.reactivex.Observable
 import io.reactivex.ObservableEmitter
+import kotlinx.coroutines.flow.MutableStateFlow
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.IOException
@@ -62,6 +63,106 @@ class MediaCodecExtractImages {
      * it by adjusting the GL viewport to get letterboxing or pillarboxing, but generally if
      * you're extracting frames you don't want black bars.
      */
+    fun extractMpegFramesToFlow(
+        inputVideo: Uri,
+        mjpegSharedFlow: MutableStateFlow<ByteArray>,
+        photoQuality: Int,
+        context: Context? = null,
+        videoStartTime: Double = 0.0,
+        videoEndTime: Double = (-1).toDouble(),
+        loop: Boolean = true
+    ): Observable<Progress> {
+
+        val startTime = System.currentTimeMillis()
+
+        val cancelable = Cancelable()
+
+        var decoder: MediaCodec? = null
+        var outputSurface: CodecOutputSurface? = null
+        var extractor: MediaExtractor? = null
+
+        return Observable.create<Progress>{ emitter ->
+
+            val saveWidth: Int
+            val saveHeight: Int
+
+            if (emitter.isDisposed)
+                return@create
+            extractor = MediaExtractor()
+            if (inputVideo.scheme == null || inputVideo.scheme == "file") {
+                val inputFilePath = inputVideo.path
+                val inputFile = File(inputFilePath!!)   // must be an absolute path
+                // The MediaExtractor error messages aren't very useful.  Check to see if the input
+                // file exists so we can throw a better one if it's not there.
+                if (!inputFile.canRead()) {
+                    emitter.onError(FileNotFoundException("Unable to read $inputFile"))
+                }
+                extractor!!.setDataSource(inputFile.toString())
+            }else{
+                val headers = mapOf<String, String>("User-Agent" to "media converter")
+                extractor!!.setDataSource(context!!, inputVideo, headers)
+            }
+
+
+
+
+            val trackIndex = selectTrack(extractor!!)
+            if (trackIndex < 0) {
+                emitter.onError(RuntimeException("No video track found in ${inputVideo.toString()}"))
+            }
+            extractor!!.selectTrack(trackIndex)
+
+            val format = extractor!!.getTrackFormat(trackIndex)
+
+            saveWidth = format.getInteger(MediaFormat.KEY_WIDTH)
+            saveHeight = format.getInteger(MediaFormat.KEY_HEIGHT)
+            log(
+                "Video size is " + format.getInteger(MediaFormat.KEY_WIDTH) + "x" +
+                        format.getInteger(MediaFormat.KEY_HEIGHT)
+            )
+
+            val frameRate = format.getInteger(MediaFormat.KEY_FRAME_RATE)
+            val duration = format.getLong(MediaFormat.KEY_DURATION)
+
+            val secToMicroSec = 1000000
+            val totalFrame = (duration * frameRate / secToMicroSec).toInt()
+
+            log(
+                "Frame rate is = " + frameRate +
+                        " Total duration is in microSec = " + duration +
+                        " Total frame count = " + totalFrame
+            )
+
+            // Could use width/height from the MediaFormat to get full-size frames.
+            outputSurface = CodecOutputSurface(saveWidth, saveHeight)
+
+            // Create a MediaCodec decoder, and configure it with the MediaFormat from the
+            // extractor.  It's very important to use the format from the extractor because
+            // it contains a copy of the CSD-0/CSD-1 codec-specific data chunks.
+            val mime = format.getString(MediaFormat.KEY_MIME)
+            decoder = MediaCodec.createDecoderByType(mime!!)
+            decoder?.configure(format, outputSurface!!.surface, null, 0)
+            decoder?.start()
+
+            doExtractToFlow(
+                extractor!!,
+                trackIndex,
+                decoder!!,
+                outputSurface!!,
+                mjpegSharedFlow,
+                photoQuality,
+                emitter,
+                totalFrame,
+                startTime,
+                cancelable
+            )
+
+        }.doOnDispose {
+            cancelable.cancel.set(true)
+        }.doOnComplete {
+            release(outputSurface, decoder, extractor)
+        }
+    }
     fun extractMpegFrames(
         inputVideo: Uri,
         timeInSec: List<Double>,
@@ -223,6 +324,159 @@ class MediaCodecExtractImages {
         /**
          * Work loop.
          */
+        @Throws(IOException::class)
+        internal fun doExtractToFlow(
+            extractor: MediaExtractor,
+            trackIndex: Int,
+            decoder: MediaCodec,
+            outputSurface: CodecOutputSurface,
+            mjpegSharedFlow: MutableStateFlow<ByteArray>,
+            photoQuality: Int,
+            observer: ObservableEmitter<Progress>,
+            totalFrame: Int,
+            startTime: Long,
+            cancel: Cancelable
+        ) {
+            val TIMEOUT_USEC = 10000
+            val decoderInputBuffers = decoder.inputBuffers
+            val info = MediaCodec.BufferInfo()
+            var inputChunk = 0
+            var decodeCount = 0
+            var frameSaveTime: Long = 0
+            var frameCounter = 0
+
+            var outputDone = false
+            var inputDone = false
+            while (!outputDone) {
+
+                if (cancel.cancel.get()) {
+                    //outputPath?.let { MediaCodecTranscoder.deleteFolder(it) }
+                    //TODO: cancel mjpegSharedFlow
+                    release(outputSurface, decoder, extractor)
+                    return
+                }
+                log("loop")
+
+                // Feed more data to the decoder.
+                if (!inputDone) {
+                    val inputBufIndex = decoder.dequeueInputBuffer(TIMEOUT_USEC.toLong())
+                    if (inputBufIndex >= 0) {
+                        log("inputBufIndex $inputBufIndex")
+
+                        val inputBuf = decoderInputBuffers[inputBufIndex]
+                        // Read the sample data into the ByteBuffer.  This neither respects nor
+                        // updates inputBuf's position, limit, etc.
+                        val chunkSize = extractor.readSampleData(inputBuf, 0)
+                        if (chunkSize < 0) {
+                            // End of stream -- send empty frame with EOS flag set.
+                            decoder.queueInputBuffer(
+                                inputBufIndex, 0, 0, 0L,
+                                MediaCodec.BUFFER_FLAG_END_OF_STREAM
+                            )
+                            inputDone = true
+                            log("sent input EOS")
+                        } else {
+                            if (extractor.sampleTrackIndex != trackIndex) {
+                                log(
+                                    "WEIRD: got sample from track " +
+                                            extractor.sampleTrackIndex + ", expected " + trackIndex
+                                )
+                            }
+
+                            log("decode count = $decodeCount")
+
+                            val presentationTimeUs = extractor.sampleTime
+
+                            decoder.queueInputBuffer(
+                                inputBufIndex, 0, chunkSize,
+                                presentationTimeUs, 0 /*flags*/
+                            )
+
+                            log(
+                                "submitted frame " + inputChunk + " to dec, size=" +
+                                        chunkSize
+                            )
+
+                            inputChunk++
+                            extractor.advance()
+                        }
+
+                    } else {
+                        log("input buffer not available")
+                    }
+                }
+
+                if (!outputDone) {
+                    val decoderStatus = decoder.dequeueOutputBuffer(info, TIMEOUT_USEC.toLong())
+                    if (decoderStatus == MediaCodec.INFO_TRY_AGAIN_LATER) {
+                        // no output available yet
+                        log("no output from decoder available")
+                    } else if (decoderStatus == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED) {
+                        // not important for us, since we're using Surface
+                        log("decoder output buffers changed")
+                    } else if (decoderStatus == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                        val newFormat = decoder.outputFormat
+                        log("decoder output format changed: $newFormat")
+                    } else if (decoderStatus < 0) {
+                        //fail("unexpected result from decoder.dequeueOutputBuffer: " + decoderStatus);
+                    } else { // decoderStatus >= 0
+                        log(
+                            "surface decoder given buffer " + decoderStatus +
+                                    " (size=" + info.size + ")"
+                        )
+                        if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                            log("output EOS")
+                            outputDone = true
+                        }
+
+                        val doRender = info.size != 0
+
+                        // As soon as we call releaseOutputBuffer, the buffer will be forwarded
+                        // to SurfaceTexture to convert to a texture.  The API doesn't guarantee
+                        // that the texture will be available before the call returns, so we
+                        // need to wait for the onFrameAvailable callback to fire.
+                        decoder.releaseOutputBuffer(decoderStatus, doRender)
+                        if (doRender) {
+                            log("awaiting decode of frame $decodeCount")
+
+                            outputSurface.awaitNewImage()
+                            outputSurface.drawImage(true)
+                            val startWhen = System.nanoTime()
+                            val frameArray = outputSurface.frameToArray(photoQuality)
+                            mjpegSharedFlow.tryEmit(frameArray)
+                            frameSaveTime += System.nanoTime() - startWhen
+                            frameCounter++
+
+                            log("saving frames $decodeCount")
+
+                            observer.onNext(
+                                Progress(
+                                    (decodeCount.toFloat() / totalFrame.toFloat() * 100).toInt(),
+                                    null,
+                                    null,
+                                    System.currentTimeMillis() - startTime
+                                )
+                            )
+
+                            if (decodeCount < totalFrame) {
+                                decodeCount++
+                            }
+                        }
+                    }
+                }
+            }
+
+            observer.onNext(
+                Progress(
+                    (decodeCount.toFloat() / totalFrame.toFloat() * 100).toInt(),
+                    "total saved frame = $frameCounter",
+                    null,
+                    System.currentTimeMillis() - startTime
+                )
+            )
+
+            observer.onComplete()
+        }
         @Throws(IOException::class)
         internal fun doExtract(
             extractor: MediaExtractor,

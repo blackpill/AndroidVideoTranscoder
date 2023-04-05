@@ -8,6 +8,7 @@ import androidx.annotation.IntRange
 import com.exozet.transcoder.ffmpeg.Progress
 import com.exozet.transcoder.ffmpeg.log
 import io.reactivex.Observable
+import kotlinx.coroutines.flow.MutableStateFlow
 import java.io.File
 
 object MediaCodecTranscoder {
@@ -33,6 +34,25 @@ object MediaCodecTranscoder {
             file.mkdirs()
 
         return mediaCodec.extractMpegFrames(inputVideo, frameTimes, Uri.parse(localSavePath), photoQuality, context)
+    }
+
+    fun extractFramesFromVideoToFlow(
+        context: Context,
+        inputVideo: Uri,
+        id: String,
+        mjpegSharedFlow: MutableStateFlow<ByteArray>,
+        @IntRange(from = 1, to = 100) photoQuality: Int = 100,
+        videoStartTime: Double = 0.0,
+        videoEndTime: Double = (-1).toDouble(),
+        loop: Boolean = true
+    ): Observable<Progress> {
+        val mediaCodec = MediaCodecExtractImages()
+
+        val internalStoragePath: String = context.filesDir.absolutePath
+        val startTime = System.currentTimeMillis()
+
+
+        return mediaCodec.extractMpegFramesToFlow(inputVideo, mjpegSharedFlow, photoQuality, context, videoStartTime, videoEndTime, loop)
     }
 
     fun createVideoFromFrames(
