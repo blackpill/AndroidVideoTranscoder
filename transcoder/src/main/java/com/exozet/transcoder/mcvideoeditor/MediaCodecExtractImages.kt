@@ -19,6 +19,7 @@ package com.exozet.transcoder.mcvideoeditor
 import android.content.Context
 import android.media.MediaCodec
 import android.media.MediaExtractor
+import android.media.MediaExtractor.SEEK_TO_PREVIOUS_SYNC
 import android.media.MediaFormat
 import android.net.Uri
 import com.exozet.transcoder.ffmpeg.Progress
@@ -30,6 +31,7 @@ import java.io.File
 import java.io.FileNotFoundException
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 //20131122: minor tweaks to saveFrame() I/O
 //20131205: add alpha to EGLConfig (huge glReadPixels speedup); pre-allocate pixel buffers;
@@ -53,6 +55,13 @@ import java.util.concurrent.atomic.AtomicBoolean
  * currently part of CTS.)
  */
 class MediaCodecExtractImages {
+    private var decoder: MediaCodec? = null
+    private val pauseable = Pauseable()
+    private val currentDecodeFrame = AtomicInteger(0)
+    fun stop(){
+        pauseable.pause.set(true)
+        decoder?.stop()
+    }
 
     /**
      * Tests extraction from an MP4 to a series of PNG files.
@@ -72,14 +81,17 @@ class MediaCodecExtractImages {
         videoEndTime: Double = (-1).toDouble(),
         loop: Boolean = true
     ): Observable<Progress> {
-
+        pauseable.pause.set(false)
         val startTime = System.currentTimeMillis()
 
         val cancelable = Cancelable()
 
-        var decoder: MediaCodec? = null
+
+
         var outputSurface: CodecOutputSurface? = null
         var extractor: MediaExtractor? = null
+        var decoder = this.decoder
+        val pauseable = this.pauseable
 
         return Observable.create<Progress>{ emitter ->
 
@@ -126,6 +138,8 @@ class MediaCodecExtractImages {
 
             val secToMicroSec = 1000000
             val totalFrame = (duration * frameRate / secToMicroSec).toInt()
+            val realStartTime:Long = if (videoStartTime > 0.01) (videoStartTime * secToMicroSec).toLong()
+                                else this.currentDecodeFrame.get() * secToMicroSec.toLong() / frameRate
 
             log(
                 "Frame rate is = " + frameRate +
@@ -153,8 +167,9 @@ class MediaCodecExtractImages {
                 photoQuality,
                 emitter,
                 totalFrame,
-                startTime,
-                cancelable
+                realStartTime,
+                cancelable,
+                pauseable
             )
 
         }.doOnDispose {
@@ -178,6 +193,7 @@ class MediaCodecExtractImages {
         var decoder: MediaCodec? = null
         var outputSurface: CodecOutputSurface? = null
         var extractor: MediaExtractor? = null
+
 
         return Observable.create<Progress>{ emitter ->
 
@@ -316,10 +332,14 @@ class MediaCodecExtractImages {
     internal class Cancelable {
         val cancel = AtomicBoolean(false)
     }
+    internal class Pauseable {
+        val pause = AtomicBoolean(false)
+    }
 
     companion object {
 
         private val TAG = "ExtractMpegFrames"
+    }
 
         /**
          * Work loop.
@@ -335,19 +355,21 @@ class MediaCodecExtractImages {
             observer: ObservableEmitter<Progress>,
             totalFrame: Int,
             startTime: Long,
-            cancel: Cancelable
+            cancel: Cancelable,
+            pause: Pauseable
         ) {
             val TIMEOUT_USEC = 10000
             val decoderInputBuffers = decoder.inputBuffers
             val info = MediaCodec.BufferInfo()
-            var inputChunk = 0
-            var decodeCount = 0
+            var inputChunk = this.currentDecodeFrame.get()
+            var decodeCount = this.currentDecodeFrame.get()
             var frameSaveTime: Long = 0
             var frameCounter = 0
 
             var outputDone = false
             var inputDone = false
-            while (!outputDone) {
+            extractor.seekTo(startTime, SEEK_TO_PREVIOUS_SYNC)
+            while (!outputDone && !pause.pause.get()) {
 
                 if (cancel.cancel.get()) {
                     //outputPath?.let { MediaCodecTranscoder.deleteFolder(it) }
@@ -460,6 +482,7 @@ class MediaCodecExtractImages {
 
                             if (decodeCount < totalFrame) {
                                 decodeCount++
+                                this.currentDecodeFrame.incrementAndGet()
                             }
                         }
                     }
@@ -477,6 +500,7 @@ class MediaCodecExtractImages {
 
             observer.onComplete()
         }
+
         @Throws(IOException::class)
         internal fun doExtract(
             extractor: MediaExtractor,
@@ -646,5 +670,5 @@ class MediaCodecExtractImages {
             decoder?.release()
             extractor?.release()
         }
-    }
+
 }

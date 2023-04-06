@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import java.io.File
 
 object MediaCodecTranscoder {
+    private val mediaCodec = MediaCodecExtractImages()
 
     fun extractFramesFromVideo(
         context: Context,
@@ -46,13 +47,14 @@ object MediaCodecTranscoder {
         videoEndTime: Double = (-1).toDouble(),
         loop: Boolean = true
     ): Observable<Progress> {
-        val mediaCodec = MediaCodecExtractImages()
-
         val internalStoragePath: String = context.filesDir.absolutePath
         val startTime = System.currentTimeMillis()
 
 
         return mediaCodec.extractMpegFramesToFlow(inputVideo, mjpegSharedFlow, photoQuality, context, videoStartTime, videoEndTime, loop)
+    }
+    fun stop() {
+        return mediaCodec.stop()
     }
 
     fun createVideoFromFrames(
