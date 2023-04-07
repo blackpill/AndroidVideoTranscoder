@@ -30,6 +30,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.IOException
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -56,11 +57,21 @@ import java.util.concurrent.atomic.AtomicInteger
  */
 class MediaCodecExtractImages {
     private var decoder: MediaCodec? = null
+    private var outputSurface: CodecOutputSurface? = null
+    private var extractor: MediaExtractor? = null
     private val pauseable = Pauseable()
+    private val cancelable = Cancelable()
     private val currentDecodeFrame = AtomicInteger(0)
-    fun stop(){
+    private var completeLatch = CountDownLatch(0)
+    fun pause(){
         pauseable.pause.set(true)
-        decoder?.stop()
+    }
+
+    fun cancel(){
+        //pause()
+        cancelable.cancel.set(true)
+        completeLatch.await()
+        //release(outputSurface, decoder, extractor)
     }
 
     /**
@@ -82,16 +93,15 @@ class MediaCodecExtractImages {
         loop: Boolean = true
     ): Observable<Progress> {
         pauseable.pause.set(false)
+        cancelable.cancel.set(false)
         val startTime = System.currentTimeMillis()
-
-        val cancelable = Cancelable()
-
-
-
-        var outputSurface: CodecOutputSurface? = null
-        var extractor: MediaExtractor? = null
+        var outputSurface = this.outputSurface
+        var extractor = this.extractor
         var decoder = this.decoder
         val pauseable = this.pauseable
+        val cancelable = this.cancelable
+        this.completeLatch = CountDownLatch(1)
+        var compLatch = this.completeLatch
 
         return Observable.create<Progress>{ emitter ->
 
@@ -169,7 +179,8 @@ class MediaCodecExtractImages {
                 totalFrame,
                 realStartTime,
                 cancelable,
-                pauseable
+                pauseable,
+                compLatch
             )
 
         }.doOnDispose {
@@ -263,7 +274,6 @@ class MediaCodecExtractImages {
             decoder = MediaCodec.createDecoderByType(mime!!)
             decoder?.configure(format, outputSurface!!.surface, null, 0)
             decoder?.start()
-
             doExtract(
                 extractor!!,
                 trackIndex,
@@ -356,7 +366,8 @@ class MediaCodecExtractImages {
             totalFrame: Int,
             startTime: Long,
             cancel: Cancelable,
-            pause: Pauseable
+            pause: Pauseable,
+            completeLatch: CountDownLatch
         ) {
             val TIMEOUT_USEC = 10000
             val decoderInputBuffers = decoder.inputBuffers
@@ -375,6 +386,7 @@ class MediaCodecExtractImages {
                     //outputPath?.let { MediaCodecTranscoder.deleteFolder(it) }
                     //TODO: cancel mjpegSharedFlow
                     release(outputSurface, decoder, extractor)
+                    completeLatch.countDown()
                     return
                 }
                 log("loop")
@@ -497,7 +509,6 @@ class MediaCodecExtractImages {
                     System.currentTimeMillis() - startTime
                 )
             )
-
             observer.onComplete()
         }
 
@@ -669,6 +680,7 @@ class MediaCodecExtractImages {
             decoder?.stop()
             decoder?.release()
             extractor?.release()
+            cancelable.cancel.set(false)
         }
 
 }

@@ -53,8 +53,11 @@ object MediaCodecTranscoder {
 
         return mediaCodec.extractMpegFramesToFlow(inputVideo, mjpegSharedFlow, photoQuality, context, videoStartTime, videoEndTime, loop)
     }
-    fun stop() {
-        return mediaCodec.stop()
+    fun pause() {
+        return mediaCodec.pause()
+    }
+    fun cancel() {
+        return mediaCodec.cancel()
     }
 
     fun createVideoFromFrames(
