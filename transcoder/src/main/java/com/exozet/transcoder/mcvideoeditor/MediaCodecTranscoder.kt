@@ -3,11 +3,10 @@ package com.exozet.transcoder.mcvideoeditor
 import android.content.Context
 import android.graphics.BitmapFactory
 import android.net.Uri
-import android.util.Log
 import androidx.annotation.IntRange
 import com.exozet.transcoder.ffmpeg.Progress
-import com.exozet.transcoder.ffmpeg.log
 import io.reactivex.Observable
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import java.io.File
 
@@ -40,18 +39,22 @@ object MediaCodecTranscoder {
     fun extractFramesFromVideoToFlow(
         context: Context,
         inputVideo: Uri,
-        id: String,
-        mjpegSharedFlow: MutableStateFlow<ByteArray>,
         @IntRange(from = 1, to = 100) photoQuality: Int = 100,
         videoStartTime: Double = 0.0,
         videoEndTime: Double = (-1).toDouble(),
         loop: Boolean = true
+    ): Flow<ByteArray> {
+        return mediaCodec.extractMpegFramesToFlow(inputVideo, photoQuality, context, videoStartTime, videoEndTime, loop)
+    }
+    fun extractAudioFromVideoToFlow(
+        context: Context,
+        inputVideo: Uri,
+        audioSharedFlow: MutableStateFlow<ByteArray>,
+        audioStartTime: Double = 0.0,
+        audioEndTime: Double = (-1).toDouble(),
+        loop: Boolean = true
     ): Observable<Progress> {
-        val internalStoragePath: String = context.filesDir.absolutePath
-        val startTime = System.currentTimeMillis()
-
-
-        return mediaCodec.extractMpegFramesToFlow(inputVideo, mjpegSharedFlow, photoQuality, context, videoStartTime, videoEndTime, loop)
+        return mediaCodec.extractAudioToFlow(inputVideo, audioSharedFlow, context, audioStartTime, audioEndTime, loop)
     }
     fun pause() {
         return mediaCodec.pause()
