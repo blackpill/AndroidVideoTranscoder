@@ -21,7 +21,6 @@ import java.util.List;
 
 import io.reactivex.Observable;
 import io.reactivex.ObservableEmitter;
-import io.reactivex.ObservableOnSubscribe;
 import io.reactivex.disposables.CompositeDisposable;
 import io.reactivex.schedulers.Schedulers;
 
@@ -53,7 +52,7 @@ public class MediaCodecCreateVideo {
     private long startTime;
 
     private List<File> frames;
-    private MediaCodecExtractImages.Cancelable cancelable;
+    private MediaCodecExtractImage.Cancelable cancelable;
 
     public MediaCodecCreateVideo(MediaConfig mediaConfig) {
 
@@ -99,7 +98,7 @@ public class MediaCodecCreateVideo {
     }
 
     @RequiresApi(api = Build.VERSION_CODES.JELLY_BEAN_MR2)
-    public void startEncoding(List<File> frames, int width, int height, Uri outputUri, MediaCodecExtractImages.Cancelable cancelable, ObservableEmitter<Progress> emitter) {
+    public void startEncoding(List<File> frames, int width, int height, Uri outputUri, MediaCodecExtractImage.Cancelable cancelable, ObservableEmitter<Progress> emitter) {
         mWidth = width;
         mHeight = height;
         this.frames = frames;

@@ -7,11 +7,11 @@ import androidx.annotation.IntRange
 import com.exozet.transcoder.ffmpeg.Progress
 import io.reactivex.Observable
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
 import java.io.File
 
 object MediaCodecTranscoder {
-    private val mediaCodec = MediaCodecExtractImages()
+    private val videoExtractor = MediaCodecExtractImage()
+    private val audioExtractor = MediaCodecExtractAudio()
 
     fun extractFramesFromVideo(
         context: Context,
@@ -21,7 +21,7 @@ object MediaCodecTranscoder {
         outputDir: Uri?,
         @IntRange(from = 1, to = 100) photoQuality: Int = 100
     ): Observable<Progress> {
-        val mediaCodec = MediaCodecExtractImages()
+        val mediaCodec = MediaCodecExtractImage()
 
         val internalStoragePath: String = context.filesDir.absolutePath
         val startTime = System.currentTimeMillis()
@@ -44,23 +44,24 @@ object MediaCodecTranscoder {
         videoEndTime: Double = (-1).toDouble(),
         loop: Boolean = true
     ): Flow<ByteArray> {
-        return mediaCodec.extractMpegFramesToFlow(inputVideo, photoQuality, context, videoStartTime, videoEndTime, loop)
+        return videoExtractor.extractMpegFramesToFlow(inputVideo, photoQuality, context, videoStartTime, videoEndTime, loop)
     }
     fun extractAudioFromVideoToFlow(
         context: Context,
         inputVideo: Uri,
-        audioSharedFlow: MutableStateFlow<ByteArray>,
         audioStartTime: Double = 0.0,
         audioEndTime: Double = (-1).toDouble(),
         loop: Boolean = true
-    ): Observable<Progress> {
-        return mediaCodec.extractAudioToFlow(inputVideo, audioSharedFlow, context, audioStartTime, audioEndTime, loop)
+    ): Flow<ByteArray> {
+        return audioExtractor.extractAudioToFlow(inputVideo, context, audioStartTime, audioEndTime, loop)
     }
     fun pause() {
-        return mediaCodec.pause()
+        videoExtractor.pause()
+        audioExtractor.pause()
     }
     fun cancel() {
-        return mediaCodec.cancel()
+        videoExtractor.cancel()
+        audioExtractor.cancel()
     }
 
     fun createVideoFromFrames(
@@ -71,7 +72,7 @@ object MediaCodecTranscoder {
     ): Observable<Progress> {
 
         var mediaCodecCreateVideo : MediaCodecCreateVideo? = null
-        val shouldCancel =  MediaCodecExtractImages.Cancelable()
+        val shouldCancel =  MediaCodecExtractImage.Cancelable()
 
         return Observable.create<Progress> { emitter ->
 
