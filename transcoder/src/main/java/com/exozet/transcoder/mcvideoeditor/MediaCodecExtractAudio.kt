@@ -19,12 +19,10 @@ package com.exozet.transcoder.mcvideoeditor
 import android.annotation.SuppressLint
 import android.content.Context
 import android.media.*
-import android.media.MediaExtractor.SEEK_TO_PREVIOUS_SYNC
 import android.net.Uri
 import android.util.Log
 import com.exozet.transcoder.ffmpeg.Progress
 import com.exozet.transcoder.ffmpeg.log
-import io.reactivex.Observable
 import io.reactivex.ObservableEmitter
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
@@ -36,7 +34,6 @@ import java.nio.ByteBuffer
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
 
 
 //20131122: minor tweaks to saveFrame() I/O
@@ -61,13 +58,9 @@ import java.util.concurrent.atomic.AtomicInteger
  * currently part of CTS.)
  */
 class MediaCodecExtractAudio {
-    private var decoder: MediaCodec? = null
-    private lateinit var outputSurface: CodecOutputSurface
     private var extractor: MediaExtractor? = null
-    private var audioExtractor: MediaExtractor? = null
     private val pauseable = Pauseable()
     private val cancelable = Cancelable()
-    private val currentDecodeFrame = AtomicInteger(0)
     private var completeLatch = CountDownLatch(0)
     private var audioCompleteLatch = CountDownLatch(0)
     private val coroutineExceptionHandler = CoroutineExceptionHandler { _, throwable ->
@@ -76,6 +69,7 @@ class MediaCodecExtractAudio {
     }
     private val eglDispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
     private val coroutineScope = CoroutineScope(SupervisorJob() + eglDispatcher + coroutineExceptionHandler)
+    private var currentSampleTime: Long = 0
     fun pause(){
         pauseable.pause.set(true)
     }
@@ -96,21 +90,17 @@ class MediaCodecExtractAudio {
     ): Flow<ByteArray> {
         return flow {
             extractor = MediaExtractor()
-            doExtractAudioToFlow(extractor, context, inputVideo, this)
+            doExtractAudioToFlow(extractor, context, inputVideo, this, audioStartTime)
         }.onCompletion {
             //release(outputSurface, decoder, extractor)
         }
     }
 
     /**
-     * @param srcPath the path of source video file.
-     * @param dstPath the path of destination video file.
-     * @param startMs starting time in milliseconds for trimming. Set to
+     * @param audioStartTime starting time in milliseconds for trimming. Set to
      * negative if starting from beginning.
      * @param endMs end time for trimming in milliseconds. Set to negative if
      * no trimming at the end.
-     * @param useAudio true if keep the audio track from the source.
-     * @param useVideo true if keep the video track from the source.
      * @throws IOException
      */
     @SuppressLint("NewApi", "WrongConstant")
@@ -120,10 +110,8 @@ class MediaCodecExtractAudio {
         context: Context?,
         inputVideo: Uri,
         flowCollector: FlowCollector<ByteArray>,
-        startMs: Int = -1,
-        endMs: Int = -1,
-        useAudio: Boolean = true,
-        useVideo: Boolean = false
+        audioStartTime: Double = -1.0,
+        endMs: Int = -1
     ) {
         val headers = mapOf<String, String>("User-Agent" to "media converter")
         if (inputVideo.scheme == null || inputVideo.scheme == "file") {
@@ -144,31 +132,38 @@ class MediaCodecExtractAudio {
         // tracks.
         val indexMap = HashMap<Int, Int>(trackCount)
         var bufferSize = -1
+        var audioTrackId = -1
         for (i in 0 until trackCount) {
             val format = extractor.getTrackFormat(i)
             val mime = format.getString(MediaFormat.KEY_MIME)
-            var selectCurrentTrack = false
-            if (mime!!.startsWith("audio/") && useAudio) {
-                selectCurrentTrack = true
-            } else if (mime.startsWith("video/") && useVideo) {
-                selectCurrentTrack = true
+            if (mime!!.startsWith("audio/")) {
+                audioTrackId = i
+                break
             }
-            if (selectCurrentTrack) {
-                extractor.selectTrack(i)
-                if (format.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)) {
-                    val newSize = format.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE)
-                    bufferSize = if (newSize > bufferSize) newSize else bufferSize
-                }
-            }
+        }
+        if (audioTrackId == -1) {
+            throw FileNotFoundException("Unable to get audio track")
+        }
+        extractor.selectTrack(audioTrackId)
+        val format = extractor.getTrackFormat(audioTrackId)
+        if (format.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)) {
+            val newSize = format.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE)
+            bufferSize = if (newSize > bufferSize) newSize else bufferSize
         }
         if (bufferSize < 0) {
             bufferSize = DEFAULT_BUFFER_SIZE
         }
+        val sampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
         // Set up the orientation and starting time for extractor.
         val retrieverSrc = MediaMetadataRetriever()
         retrieverSrc.setDataSource(context, inputVideo)
-        if (startMs > 0) {
-            extractor.seekTo((startMs * 1000).toLong(), MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+        val frameRate = format.getInteger(MediaFormat.KEY_FRAME_RATE)
+        val secToMicroSec = 1000000
+        val realStartTime: Long =
+            if (audioStartTime > 0.01) (audioStartTime * secToMicroSec).toLong()
+            else this@MediaCodecExtractAudio.currentSampleTime
+        if (realStartTime > 0.01) {
+            extractor.seekTo(realStartTime, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
         }
         // Copy the samples from MediaExtractor to MediaMuxer. We will loop
         // for copying each sample and stop when we get to the end of the source
@@ -178,7 +173,7 @@ class MediaCodecExtractAudio {
         val dstBufLength = bufferSize + 7
         val dstBuf: ByteBuffer = ByteBuffer.allocate(bufferSize)
         val adtsArray = ByteArray(7)
-        var dstBufArray = ByteArray(dstBufLength)
+        var dstBufArray: ByteArray
         val bufferInfo = MediaCodec.BufferInfo()
         while (true) {
             bufferInfo.offset = offset
@@ -189,6 +184,7 @@ class MediaCodecExtractAudio {
                 break
             } else {
                 bufferInfo.presentationTimeUs = extractor.sampleTime
+                currentSampleTime = extractor.sampleTime
                 if (endMs > 0 && bufferInfo.presentationTimeUs > endMs.toLong() * 1000) {
                     Log.d(TAG, "The current sample is over the trim end time.")
                     break
