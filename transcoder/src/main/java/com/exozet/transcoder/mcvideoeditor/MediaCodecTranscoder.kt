@@ -64,6 +64,10 @@ object MediaCodecTranscoder {
         audioExtractor.cancel()
     }
 
+    fun setReleasedLatch() {
+        videoExtractor.setReleasedLatch()
+    }
+
     fun createVideoFromFrames(
         frameFolder: Uri,
         outputUri: Uri,

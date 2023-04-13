@@ -16,7 +16,6 @@ package com.exozet.transcoder.mcvideoeditor
  * limitations under the License.
  */
 
-import android.annotation.SuppressLint
 import android.content.Context
 import android.media.*
 import android.media.MediaExtractor.SEEK_TO_PREVIOUS_SYNC
@@ -60,32 +59,39 @@ import java.util.concurrent.atomic.AtomicInteger
  * currently part of CTS.)
  */
 class MediaCodecExtractImage {
-    private var decoder: MediaCodec? = null
-    private lateinit var outputSurface: CodecOutputSurface
-    private var extractor: MediaExtractor? = null
+    //private var decoder: MediaCodec? = null
+    //private lateinit var outputSurface: CodecOutputSurface
+    //private var extractor: MediaExtractor? = null
     private val pauseable = Pauseable()
     private val cancelable = Cancelable()
     private val currentDecodeFrame = AtomicInteger(0)
-    private var completeLatch = CountDownLatch(0)
+    private var releasedLatch = CountDownLatch(0)
     private val coroutineExceptionHandler = CoroutineExceptionHandler { _, throwable ->
 //        XLog.e(getLog("onCoroutineException"), throwable)
         Log.e("MediaCodecExtractImages", throwable.toString())
     }
     private val eglDispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
     private val coroutineScope = CoroutineScope(SupervisorJob() + eglDispatcher + coroutineExceptionHandler)
+    private var outputDone = false
+    private var surfaceToFlowChannel = Channel<ByteArray>()
     fun pause(){
         pauseable.pause.set(true)
+    }
+
+    fun setReleasedLatch(){
+        releasedLatch = CountDownLatch(1) //use this to make sure resources are fully released
+        Log.d("worker", "releasedLatch set 1")
     }
 
     fun cancel(){
         //pause()
         cancelable.cancel.set(true)
-        completeLatch.await()
+        surfaceToFlowChannel = Channel<ByteArray>()
+//        completeLatch.await()
         //release(outputSurface, decoder, extractor)
     }
 
-    private var outputDone = false
-    private val channel = Channel<ByteArray>()
+
     /**
      * Tests extraction from an MP4 to a series of PNG files.
      *
@@ -103,15 +109,18 @@ class MediaCodecExtractImage {
         videoEndTime: Double = (-1).toDouble(),
         loop: Boolean = true
     ): Flow<ByteArray> {
-
+        Log.d("worker", "releasedLatch.await() start")
+        releasedLatch.await()
+        Log.d("worker", "releasedLatch.await() passed")
+        var decoder: MediaCodec? = null
+        var extractor: MediaExtractor? = null
+        var outputSurface: CodecOutputSurface? = null
+        released.getAndSet(false)
         coroutineScope.launch {
             pauseable.pause.set(false)
             cancelable.cancel.set(false)
             val startTime = System.currentTimeMillis()
             //var outputSurface = this.outputSurface
-            this@MediaCodecExtractImage.completeLatch = CountDownLatch(1)
-            var compLatch = this@MediaCodecExtractImage.completeLatch
-
             val saveWidth: Int
             val saveHeight: Int
 //            if (emitter.isDisposed)
@@ -163,7 +172,7 @@ class MediaCodecExtractImage {
 
             // Could use width/height from the MediaFormat to get full-size frames.
             outputSurface = CodecOutputSurface(saveWidth, saveHeight)
-            val surface = outputSurface.surface
+            val surface = outputSurface?.surface
 
             // Create a MediaCodec decoder, and configure it with the MediaFormat from the
             // extractor.  It's very important to use the format from the extractor because
@@ -178,21 +187,22 @@ class MediaCodecExtractImage {
                 extractor!!,
                 videoTrackIndex,
                 decoder!!,
-                outputSurface,
+                outputSurface!!,
                 photoQuality,
                 totalFrame,
                 realStartTime,
                 cancelable,
-                pauseable,
-                compLatch
+                pauseable
             )
         }
         return flow {
-            while(!(outputDone && channel.isEmpty)) {
+            while(!(outputDone && surfaceToFlowChannel.isEmpty) && !cancelable.cancel.get()) {
                 try {
-                    emit(channel.receive())
+                    emit(surfaceToFlowChannel.receive())
                 } catch (e: Exception) {
-                    e.printStackTrace()
+                    if(e !is java.util.concurrent.CancellationException) {
+                        e.printStackTrace()
+                    }
                 }
             }
         }.onCompletion {
@@ -375,8 +385,7 @@ class MediaCodecExtractImage {
             totalFrame: Int,
             startTime: Long,
             cancel: Cancelable,
-            pause: Pauseable,
-            completeLatch: CountDownLatch
+            pause: Pauseable
         ) {
             val TIMEOUT_USEC = 10000
             val decoderInputBuffers = decoder.inputBuffers
@@ -390,14 +399,14 @@ class MediaCodecExtractImage {
             extractor.seekTo(startTime, SEEK_TO_PREVIOUS_SYNC)
             while (!outputDone && !pause.pause.get()) {
 
-                if (cancel.cancel.get()) {
-                    //outputPath?.let { MediaCodecTranscoder.deleteFolder(it) }
-                    //TODO: cancel mjpegSharedFlow
-                    release(outputSurface, decoder, extractor)
-                    completeLatch.countDown()
-                    return
-                }
-                log("loop")
+//                if (cancel.cancel.get()) {
+//                    //outputPath?.let { MediaCodecTranscoder.deleteFolder(it) }
+//                    //TODO: cancel mjpegSharedFlow
+//                    release(outputSurface, decoder, extractor)
+//                    completeLatch.countDown()
+//                    return
+//                }
+//                log("loop")
 
                 // Feed more data to the decoder.
                 if (!inputDone) {
@@ -460,7 +469,7 @@ class MediaCodecExtractImage {
                         val newFormat = decoder.outputFormat
                         log("decoder output format changed: $newFormat")
                     } else if (decoderStatus < 0) {
-                        //fail("unexpected result from decoder.dequeueOutputBuffer: " + decoderStatus);
+                        Log.e("Decoder", "unexpected result from decoder.dequeueOutputBuffer: " + decoderStatus);
                     } else { // decoderStatus >= 0
                         log(
                             "surface decoder given buffer " + decoderStatus +
@@ -482,10 +491,13 @@ class MediaCodecExtractImage {
                             log("awaiting decode of frame $decodeCount")
 
                             outputSurface.awaitNewImage()
+                            log("awaitNewImage passed: $decodeCount")
                             outputSurface.drawImage(true)
+                            log("drawImage passed: $decodeCount")
                             val startWhen = System.nanoTime()
                             try {
-                                channel.send(outputSurface.frameToArray(photoQuality))
+                                surfaceToFlowChannel.send(outputSurface.frameToArray(photoQuality))
+                                log("surfaceToFlowChannel sent: $decodeCount")
                             } catch (e:java.lang.Exception){
                                 e.printStackTrace()
                             }
@@ -664,17 +676,23 @@ class MediaCodecExtractImage {
 
             observer.onComplete()
         }
+    private val released = AtomicBoolean(false)
 
         private fun release(
             outputSurface: CodecOutputSurface?,
             decoder: MediaCodec?,
             extractor: MediaExtractor?
         ) {
-            outputSurface?.release()
-            decoder?.stop()
-            decoder?.release()
-            extractor?.release()
-            cancelable.cancel.set(false)
+            if(!released.getAndSet(true)) {
+                outputSurface?.release()
+                decoder?.stop()
+                decoder?.release()
+                extractor?.release()
+                cancelable.cancel.set(false)
+                releasedLatch.countDown()
+                Log.d("worker", "releasedLatch set 0")
+
+            }
         }
 
 }

@@ -61,8 +61,8 @@ class MediaCodecExtractAudio {
     private var extractor: MediaExtractor? = null
     private val pauseable = Pauseable()
     private val cancelable = Cancelable()
-    private var completeLatch = CountDownLatch(0)
-    private var audioCompleteLatch = CountDownLatch(0)
+//    private var completeLatch = CountDownLatch(0)
+//    private var audioCompleteLatch = CountDownLatch(0)
     private val coroutineExceptionHandler = CoroutineExceptionHandler { _, throwable ->
 //        XLog.e(getLog("onCoroutineException"), throwable)
         Log.e("MediaCodecExtractImages", throwable.toString())
@@ -77,7 +77,7 @@ class MediaCodecExtractAudio {
     fun cancel(){
         //pause()
         cancelable.cancel.set(true)
-        completeLatch.await()
+//        completeLatch.await()
         //release(outputSurface, decoder, extractor)
     }
 
