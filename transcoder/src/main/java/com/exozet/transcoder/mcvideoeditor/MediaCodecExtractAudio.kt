@@ -93,6 +93,7 @@ class MediaCodecExtractAudio {
             doExtractAudioToFlow(extractor, context, inputVideo, this, audioStartTime)
         }.onCompletion {
             //release(outputSurface, decoder, extractor)
+            Log.d(TAG, "complete")
         }
     }
 
@@ -153,11 +154,10 @@ class MediaCodecExtractAudio {
         if (bufferSize < 0) {
             bufferSize = DEFAULT_BUFFER_SIZE
         }
-        val sampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+//        val sampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
         // Set up the orientation and starting time for extractor.
-        val retrieverSrc = MediaMetadataRetriever()
-        retrieverSrc.setDataSource(context, inputVideo)
-        val frameRate = format.getInteger(MediaFormat.KEY_FRAME_RATE)
+//        val retrieverSrc = MediaMetadataRetriever()
+//        retrieverSrc.setDataSource(context, inputVideo)
         val secToMicroSec = 1000000
         val realStartTime: Long =
             if (audioStartTime > 0.01) (audioStartTime * secToMicroSec).toLong()
@@ -169,7 +169,7 @@ class MediaCodecExtractAudio {
         // for copying each sample and stop when we get to the end of the source
         // file or exceed the end time of the trimming.
         val offset = 0
-        var trackIndex = -1
+//        var trackIndex = -1
         val dstBufLength = bufferSize + 7
         val dstBuf: ByteBuffer = ByteBuffer.allocate(bufferSize)
         val adtsArray = ByteArray(7)
@@ -394,7 +394,7 @@ class MediaCodecExtractAudio {
 
     companion object {
 
-        private val TAG = "ExtractMpegFrames"
+        private val TAG = "MediaCodecExtractAudio"
     }
 
 
