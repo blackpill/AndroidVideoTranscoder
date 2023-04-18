@@ -7,6 +7,7 @@ import androidx.annotation.IntRange
 import com.exozet.transcoder.ffmpeg.Progress
 import io.reactivex.Observable
 import kotlinx.coroutines.flow.Flow
+import org.json.JSONObject
 import java.io.File
 
 object MediaCodecTranscoder {
@@ -45,6 +46,12 @@ object MediaCodecTranscoder {
         loop: Boolean = true
     ): Flow<ByteArray> {
         return videoExtractor.extractMpegFramesToFlow(inputVideo, photoQuality, context, videoStartTime, videoEndTime, loop)
+    }
+    fun getMetaInfo(
+        context: Context,
+        inputVideo: Uri
+    ): JSONObject {
+        return videoExtractor.getMetaInfo(inputVideo, context)
     }
     fun extractAudioFromVideoToFlow(
         context: Context,

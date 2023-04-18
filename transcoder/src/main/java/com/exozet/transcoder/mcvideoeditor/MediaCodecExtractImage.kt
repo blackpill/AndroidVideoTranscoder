@@ -28,6 +28,7 @@ import io.reactivex.ObservableEmitter
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
+import org.json.JSONObject
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.IOException
@@ -91,7 +92,50 @@ class MediaCodecExtractImage {
         //release(outputSurface, decoder, extractor)
     }
 
+    fun getMetaInfo(
+        inputVideo: Uri,
+        context: Context? = null,
+    ): JSONObject {
+        val extractor = MediaExtractor()
+        if (inputVideo.scheme == null || inputVideo.scheme == "file") {
+            val inputFilePath = inputVideo.path
+            val inputFile = File(inputFilePath!!)   // must be an absolute path
+            // The MediaExtractor error messages aren't very useful.  Check to see if the input
+            // file exists so we can throw a better one if it's not there.
+            if (!inputFile.canRead()) {
+                throw FileNotFoundException("Unable to read $inputFile")
+            }
+            extractor!!.setDataSource(inputFile.toString())
+        } else {
+            val headers = mapOf<String, String>("User-Agent" to "media converter")
+            extractor!!.setDataSource(context!!, inputVideo, headers)
+        }
 
+        val videoTrackIndex = getTrackId(extractor!!, "video")
+        if (videoTrackIndex < 0) {
+            throw RuntimeException("No video track found in ${inputVideo.toString()}")
+        }
+        extractor!!.selectTrack(videoTrackIndex)
+
+        val format = extractor!!.getTrackFormat(videoTrackIndex)
+
+        val videoWidth = format.getInteger(MediaFormat.KEY_WIDTH)
+        val videoHeight = format.getInteger(MediaFormat.KEY_HEIGHT)
+        log(
+            "Video size is " + format.getInteger(MediaFormat.KEY_WIDTH) + "x" +
+                    format.getInteger(MediaFormat.KEY_HEIGHT)
+        )
+
+        val frameRate = format.getInteger(MediaFormat.KEY_FRAME_RATE)
+        val duration = format.getLong(MediaFormat.KEY_DURATION)
+        val valuePacket = JSONObject()
+
+        valuePacket.put("duration", duration)
+        valuePacket.put("frameRate", frameRate)
+        valuePacket.put("videoWidth", videoWidth)
+        valuePacket.put("videoHeight", videoHeight)
+        return valuePacket
+    }
     /**
      * Tests extraction from an MP4 to a series of PNG files.
      *
