@@ -87,7 +87,7 @@ class MediaCodecExtractImage {
     fun cancel(){
         //pause()
         cancelable.cancel.set(true)
-        surfaceToFlowChannel = Channel<ByteArray>()
+        surfaceToFlowChannel = Channel()
 //        completeLatch.await()
         //release(outputSurface, decoder, extractor)
     }
@@ -105,22 +105,23 @@ class MediaCodecExtractImage {
             if (!inputFile.canRead()) {
                 throw FileNotFoundException("Unable to read $inputFile")
             }
-            extractor!!.setDataSource(inputFile.toString())
+            extractor.setDataSource(inputFile.toString())
         } else {
-            val headers = mapOf<String, String>("User-Agent" to "media converter")
-            extractor!!.setDataSource(context!!, inputVideo, headers)
+            val headers = mapOf("User-Agent" to "media converter")
+            extractor.setDataSource(context!!, inputVideo, headers)
         }
 
-        val videoTrackIndex = getTrackId(extractor!!, "video")
+        val videoTrackIndex = getTrackId(extractor, "video")
         if (videoTrackIndex < 0) {
-            throw RuntimeException("No video track found in ${inputVideo.toString()}")
+            throw RuntimeException("No video track found in $inputVideo")
         }
-        extractor!!.selectTrack(videoTrackIndex)
+        extractor.selectTrack(videoTrackIndex)
 
-        val format = extractor!!.getTrackFormat(videoTrackIndex)
+        val format = extractor.getTrackFormat(videoTrackIndex)
 
-        val videoWidth = format.getInteger(MediaFormat.KEY_WIDTH)
-        val videoHeight = format.getInteger(MediaFormat.KEY_HEIGHT)
+        val scale = 30
+        val videoWidth = format.getInteger(MediaFormat.KEY_WIDTH)  * scale / 100
+        val videoHeight = format.getInteger(MediaFormat.KEY_HEIGHT)  * scale / 100
         log(
             "Video size is " + format.getInteger(MediaFormat.KEY_WIDTH) + "x" +
                     format.getInteger(MediaFormat.KEY_HEIGHT)
@@ -180,20 +181,21 @@ class MediaCodecExtractImage {
                 }
                 extractor!!.setDataSource(inputFile.toString())
             } else {
-                val headers = mapOf<String, String>("User-Agent" to "media converter")
+                val headers = mapOf("User-Agent" to "media converter")
                 extractor!!.setDataSource(context!!, inputVideo, headers)
             }
 
             val videoTrackIndex = getTrackId(extractor!!, "video")
             if (videoTrackIndex < 0) {
-                throw RuntimeException("No video track found in ${inputVideo.toString()}")
+                throw RuntimeException("No video track found in $inputVideo")
             }
             extractor!!.selectTrack(videoTrackIndex)
 
             val format = extractor!!.getTrackFormat(videoTrackIndex)
 
-            saveWidth = format.getInteger(MediaFormat.KEY_WIDTH)
-            saveHeight = format.getInteger(MediaFormat.KEY_HEIGHT)
+            val scale = 30
+            saveWidth = format.getInteger(MediaFormat.KEY_WIDTH) * scale / 100
+            saveHeight = format.getInteger(MediaFormat.KEY_HEIGHT) * scale / 100
             log(
                 "Video size is " + format.getInteger(MediaFormat.KEY_WIDTH) + "x" +
                         format.getInteger(MediaFormat.KEY_HEIGHT)
@@ -270,7 +272,7 @@ class MediaCodecExtractImage {
         var extractor: MediaExtractor? = null
 
 
-        return Observable.create<Progress>{ emitter ->
+        return Observable.create { emitter ->
 
             val outputPath = outputDir.path
 
@@ -290,7 +292,7 @@ class MediaCodecExtractImage {
                 }
                 extractor!!.setDataSource(inputFile.toString())
             }else{
-                val headers = mapOf<String, String>("User-Agent" to "media converter")
+                val headers = mapOf("User-Agent" to "media converter")
                 extractor!!.setDataSource(context!!, inputVideo, headers)
             }
 
@@ -299,7 +301,7 @@ class MediaCodecExtractImage {
 
             val videoTrackIndex = getTrackId(extractor!!, "video")
             if (videoTrackIndex < 0) {
-                emitter.onError(RuntimeException("No video track found in ${inputVideo.toString()}"))
+                emitter.onError(RuntimeException("No video track found in $inputVideo"))
             }
             extractor!!.selectTrack(videoTrackIndex)
 
@@ -412,7 +414,7 @@ class MediaCodecExtractImage {
 
     companion object {
 
-        private val TAG = "ExtractMpegFrames"
+        private const val TAG = "ExtractMpegFrames"
     }
 
         /**
@@ -513,7 +515,9 @@ class MediaCodecExtractImage {
                         val newFormat = decoder.outputFormat
                         log("decoder output format changed: $newFormat")
                     } else if (decoderStatus < 0) {
-                        Log.e("Decoder", "unexpected result from decoder.dequeueOutputBuffer: " + decoderStatus);
+                        Log.e("Decoder",
+                            "unexpected result from decoder.dequeueOutputBuffer: $decoderStatus"
+                        )
                     } else { // decoderStatus >= 0
                         log(
                             "surface decoder given buffer " + decoderStatus +
