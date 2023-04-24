@@ -30,8 +30,8 @@ import kotlinx.coroutines.flow.*
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.IOException
+import java.io.InputStream
 import java.nio.ByteBuffer
-import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -81,6 +81,85 @@ class MediaCodecExtractAudio {
         //release(outputSurface, decoder, extractor)
     }
 
+
+    fun extractAudioToStream(inputVideo: Uri, context: Context?): InputStream {
+        val inputStream = object : InputStream() {
+            private val mediaExtractor = MediaExtractor()
+            private var audioTrackIndex = -1
+            private var dstBuffer: ByteBuffer? = null
+            private var dstBufferSize: Int = 0
+            private var bytesRead = 0
+            private var adtsAdded = false
+
+            init {
+                val headers = mapOf("User-Agent" to "media converter")
+                mediaExtractor.setDataSource(context!!, inputVideo, headers)
+                for (i in 0 until mediaExtractor.trackCount) {
+                    val trackFormat = mediaExtractor.getTrackFormat(i)
+                    val mimeType = trackFormat.getString(MediaFormat.KEY_MIME)
+                    if (mimeType?.startsWith("audio/") == true) {
+                        audioTrackIndex = i
+                        dstBuffer = ByteBuffer.allocate(trackFormat.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE))
+                        dstBufferSize = trackFormat.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE)
+                        mediaExtractor.selectTrack(audioTrackIndex)
+                        break
+                    }
+                }
+            }
+
+            override fun read(): Int {
+                val buffer = ByteArray(1)
+                return if (read(buffer) != -1) buffer[0].toInt() and 0xff else -1
+            }
+
+            override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+                Log.d("read", "offset = " + offset + "length = " + length)
+                if (audioTrackIndex == -1 || this.dstBuffer == null) {
+                    return -1
+                }
+
+                if (bytesRead == -1) {
+                    return -1
+                }
+                var bytesToRead = minOf(length, bytesRead)
+                bytesRead -= bytesToRead
+                if(bytesToRead > 0 && !adtsAdded){ // add adts
+                    val adtsArray = ByteArray(7)
+                    val mergeSize = dstBufferSize + 7
+                    addADTStoPacket(adtsArray, mergeSize)
+                    val mergeArray = adtsArray + this.dstBuffer!!.array()
+                    adtsAdded = true
+                    bytesToRead += 7
+                    mergeArray.copyInto(buffer, offset, 0, bytesToRead)
+                }else{
+                    this.dstBuffer!!.get(buffer, offset, bytesToRead)
+                }
+
+
+                if (bytesRead == 0) { // Begin fetching the next sample
+                    val sampleSize = mediaExtractor.readSampleData(this.dstBuffer!!, 0)
+                    if (sampleSize >= 0) {
+                        // bytesRead = sampleSize
+                        bytesRead = dstBufferSize
+                        adtsAdded = false
+                        mediaExtractor.advance()
+                    } else {
+                        bytesRead = -1
+                    }
+                }
+
+                return bytesToRead
+            }
+
+            override fun close() {
+                mediaExtractor.release()
+            }
+        }
+
+        return inputStream
+    }
+
+
     fun extractAudioToFlow(
         inputVideo: Uri,
         context: Context? = null,
@@ -114,7 +193,7 @@ class MediaCodecExtractAudio {
         audioStartTime: Double = -1.0,
         endMs: Int = -1
     ) {
-        val headers = mapOf<String, String>("User-Agent" to "media converter")
+        val headers = mapOf("User-Agent" to "media converter")
         if (inputVideo.scheme == null || inputVideo.scheme == "file") {
             val inputFilePath = inputVideo.path
             val inputFile = File(inputFilePath!!)   // must be an absolute path
@@ -147,6 +226,9 @@ class MediaCodecExtractAudio {
         }
         extractor.selectTrack(audioTrackId)
         val format = extractor.getTrackFormat(audioTrackId)
+        val durationUs = format.getLong(MediaFormat.KEY_DURATION)
+        val sampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+
         if (format.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)) {
             val newSize = format.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE)
             bufferSize = if (newSize > bufferSize) newSize else bufferSize
@@ -246,7 +328,7 @@ class MediaCodecExtractAudio {
         useAudio: Boolean = true,
         useVideo: Boolean = false
     ) {
-        val headers = mapOf<String, String>("User-Agent" to "media converter")
+        val headers = mapOf("User-Agent" to "media converter")
         if (inputVideo.scheme == null || inputVideo.scheme == "file") {
             val inputFilePath = inputVideo.path
             val inputFile = File(inputFilePath!!)   // must be an absolute path
@@ -394,7 +476,7 @@ class MediaCodecExtractAudio {
 
     companion object {
 
-        private val TAG = "MediaCodecExtractAudio"
+        private const val TAG = "MediaCodecExtractAudio"
     }
 
 

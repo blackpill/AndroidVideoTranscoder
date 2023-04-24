@@ -9,6 +9,7 @@ import io.reactivex.Observable
 import kotlinx.coroutines.flow.Flow
 import org.json.JSONObject
 import java.io.File
+import java.io.InputStream
 
 object MediaCodecTranscoder {
     private val videoExtractor = MediaCodecExtractImage()
@@ -61,6 +62,15 @@ object MediaCodecTranscoder {
         loop: Boolean = true
     ): Flow<ByteArray> {
         return audioExtractor.extractAudioToFlow(inputVideo, context, audioStartTime, audioEndTime, loop)
+    }
+    fun extractAudioFromVideoToStream(
+        context: Context,
+        inputVideo: Uri,
+        audioStartTime: Double = 0.0,
+        audioEndTime: Double = (-1).toDouble(),
+        loop: Boolean = true
+    ): InputStream {
+        return audioExtractor.extractAudioToStream(inputVideo, context)
     }
     fun pause() {
         videoExtractor.pause()
