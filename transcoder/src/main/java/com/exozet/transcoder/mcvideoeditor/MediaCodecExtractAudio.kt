@@ -73,10 +73,11 @@ class MediaCodecExtractAudio {
         val inputStream = object : InputStream() {
             private val mediaExtractor = MediaExtractor()
             private var audioTrackIndex = -1
-            private var dstBuffer: ByteBuffer? = null
-            private var dstBufferSize: Int = 0
-            private var bytesRead = 0
-            private var adtsAdded = false
+            private var samplePacketBuffer: ByteBuffer? = null
+            private var sampleBufferSize: Int = 0
+            private var mergedPacketArray: ByteArray? = null
+            private var mergedPacketSize: Int = 0
+            private var bytesRead = 0 //The number of bytes in packet already been read
 
             init {
                 val headers = mapOf("User-Agent" to "media converter")
@@ -86,8 +87,8 @@ class MediaCodecExtractAudio {
                     val mimeType = trackFormat.getString(MediaFormat.KEY_MIME)
                     if (mimeType?.startsWith("audio/") == true) {
                         audioTrackIndex = i
-                        dstBuffer = ByteBuffer.allocate(trackFormat.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE))
-                        dstBufferSize = trackFormat.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE)
+                        samplePacketBuffer = ByteBuffer.allocate(trackFormat.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE))
+                        sampleBufferSize = trackFormat.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE)
                         mediaExtractor.selectTrack(audioTrackIndex)
                         break
                     }
@@ -101,37 +102,31 @@ class MediaCodecExtractAudio {
 
             override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
                 Log.d("read", "offset = " + offset + "length = " + length)
-                if (audioTrackIndex == -1 || this.dstBuffer == null) {
+                if (audioTrackIndex == -1 || this.samplePacketBuffer == null) {
                     return -1
                 }
 
-                if (bytesRead == -1) {
+                if (mergedPacketSize == -1) {
                     return -1
                 }
-                var bytesToRead = minOf(length, bytesRead)
-                bytesRead -= bytesToRead
-                if(bytesToRead > 0 && !adtsAdded){ // add adts
-                    val adtsArray = ByteArray(7)
-                    val mergeSize = dstBufferSize + 7
-                    addADTStoPacket(adtsArray, mergeSize)
-                    val mergeArray = adtsArray + this.dstBuffer!!.array()
-                    adtsAdded = true
-                    bytesToRead += 7
-                    mergeArray.copyInto(buffer, offset, 0, bytesToRead)
-                }else{
-                    this.dstBuffer!!.get(buffer, offset, bytesToRead)
+                var bytesToRead = minOf(length, mergedPacketSize)
+                if(bytesToRead > 0){ // add adts
+                    mergedPacketArray?.copyInto(buffer, offset, bytesRead, bytesToRead)
+                    bytesRead += bytesToRead
                 }
 
 
-                if (bytesRead == 0) { // Begin fetching the next sample
-                    val sampleSize = mediaExtractor.readSampleData(this.dstBuffer!!, 0)
+                if (bytesRead >= mergedPacketSize) { // All bytes are read, then begin fetching the next sample
+                    val sampleSize = mediaExtractor.readSampleData(this.samplePacketBuffer!!, 0)
                     if (sampleSize >= 0) {
-                        // bytesRead = sampleSize
-                        bytesRead = dstBufferSize
-                        adtsAdded = false
+                        val adtsArray = ByteArray(7)
+                        mergedPacketSize = sampleSize + 7
+                        addADTStoPacket(adtsArray, mergedPacketSize)
+                        mergedPacketArray = adtsArray + this.samplePacketBuffer!!.array()
+                        bytesRead = 0
                         mediaExtractor.advance()
                     } else {
-                        bytesRead = -1
+                        mergedPacketSize = -1
                     }
                 }
 
