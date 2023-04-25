@@ -59,8 +59,6 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 class MediaCodecExtractAudio {
     private var extractor: MediaExtractor? = null
-    private val pauseable = Pauseable()
-    private val cancelable = Cancelable()
 //    private var completeLatch = CountDownLatch(0)
 //    private var audioCompleteLatch = CountDownLatch(0)
     private val coroutineExceptionHandler = CoroutineExceptionHandler { _, throwable ->
@@ -70,17 +68,6 @@ class MediaCodecExtractAudio {
     private val eglDispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
     private val coroutineScope = CoroutineScope(SupervisorJob() + eglDispatcher + coroutineExceptionHandler)
     private var currentSampleTime: Long = 0
-    fun pause(){
-        pauseable.pause.set(true)
-    }
-
-    fun cancel(){
-        //pause()
-        cancelable.cancel.set(true)
-//        completeLatch.await()
-        //release(outputSurface, decoder, extractor)
-    }
-
 
     fun extractAudioToStream(inputVideo: Uri, context: Context?): InputStream {
         val inputStream = object : InputStream() {
@@ -489,7 +476,6 @@ class MediaCodecExtractAudio {
         decoder?.stop()
         decoder?.release()
         extractor?.release()
-        cancelable.cancel.set(false)
     }
 
 }

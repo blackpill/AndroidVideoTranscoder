@@ -74,11 +74,9 @@ object MediaCodecTranscoder {
     }
     fun pause() {
         videoExtractor.pause()
-        audioExtractor.pause()
     }
     fun cancel() {
         videoExtractor.cancel()
-        audioExtractor.cancel()
     }
 
     fun setReleasedLatch() {
