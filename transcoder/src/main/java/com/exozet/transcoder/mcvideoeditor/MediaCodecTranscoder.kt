@@ -42,11 +42,12 @@ object MediaCodecTranscoder {
         context: Context,
         inputVideo: Uri,
         @IntRange(from = 1, to = 100) photoQuality: Int = 100,
+        @IntRange(from = 1, to = 100) scalePercent: Int = 100,
         videoStartTime: Double = 0.0,
         videoEndTime: Double = (-1).toDouble(),
         loop: Boolean = true
     ): Flow<ByteArray> {
-        return videoExtractor.extractMpegFramesToFlow(inputVideo, photoQuality, context, videoStartTime, videoEndTime, loop)
+        return videoExtractor.extractMpegFramesToFlow(inputVideo, photoQuality, context, scalePercent, videoStartTime, videoEndTime, loop)
     }
     fun getMetaInfo(
         context: Context,

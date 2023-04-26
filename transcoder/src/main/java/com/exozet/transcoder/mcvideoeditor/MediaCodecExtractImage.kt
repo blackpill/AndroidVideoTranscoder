@@ -119,9 +119,8 @@ class MediaCodecExtractImage {
 
         val format = extractor.getTrackFormat(videoTrackIndex)
 
-        val scale = 30
-        val videoWidth = format.getInteger(MediaFormat.KEY_WIDTH)  * scale / 100
-        val videoHeight = format.getInteger(MediaFormat.KEY_HEIGHT)  * scale / 100
+        val videoWidth = format.getInteger(MediaFormat.KEY_WIDTH)
+        val videoHeight = format.getInteger(MediaFormat.KEY_HEIGHT)
         log(
             "Video size is " + format.getInteger(MediaFormat.KEY_WIDTH) + "x" +
                     format.getInteger(MediaFormat.KEY_HEIGHT)
@@ -150,6 +149,7 @@ class MediaCodecExtractImage {
         inputVideo: Uri,
         photoQuality: Int,
         context: Context? = null,
+        scalePercent: Int = 100,
         videoStartTime: Double = 0.0,
         videoEndTime: Double = (-1).toDouble(),
         loop: Boolean = true
@@ -193,9 +193,8 @@ class MediaCodecExtractImage {
 
             val format = extractor!!.getTrackFormat(videoTrackIndex)
 
-            val scale = 30
-            saveWidth = format.getInteger(MediaFormat.KEY_WIDTH) * scale / 100
-            saveHeight = format.getInteger(MediaFormat.KEY_HEIGHT) * scale / 100
+            saveWidth = format.getInteger(MediaFormat.KEY_WIDTH) * scalePercent / 100
+            saveHeight = format.getInteger(MediaFormat.KEY_HEIGHT) * scalePercent / 100
             log(
                 "Video size is " + format.getInteger(MediaFormat.KEY_WIDTH) + "x" +
                         format.getInteger(MediaFormat.KEY_HEIGHT)
