@@ -101,7 +101,6 @@ class MediaCodecExtractAudio {
             }
 
             override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
-                Log.d("read", "offset = " + offset + "length = " + length)
                 if (audioTrackIndex == -1 || this.samplePacketBuffer == null) {
                     return -1
                 }
@@ -272,6 +271,7 @@ class MediaCodecExtractAudio {
      * Note the packetLen must count in the ADTS header itself.
      */
     private fun addADTStoPacket(packet: ByteArray, packetLen: Int) {
+        // TODO: shouldn't be fixed
         val profile = 2 //AAC LC
         //39=MediaCodecInfo.CodecProfileLevel.AACObjectELD;
         val freqIdx = 4 //44.1KHz
