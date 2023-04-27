@@ -235,10 +235,9 @@ import static com.exozet.transcoder.ffmpeg.DebugExtensions.log;
     /**
      * Draws the data from SurfaceTexture onto the current EGL surface.
      *
-     * @param invert if set, render the image with Y inverted (0,0 in top left)
      */
-    public void drawImage(boolean invert) {
-        mTextureRender.drawFrame(mSurfaceTexture, invert);
+    public void drawImage() {
+        mTextureRender.drawFrame(mSurfaceTexture);
     }
 
     // SurfaceTexture callback

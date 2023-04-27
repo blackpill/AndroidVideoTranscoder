@@ -192,9 +192,12 @@ class MediaCodecExtractImage {
             extractor!!.selectTrack(videoTrackIndex)
 
             val format = extractor!!.getTrackFormat(videoTrackIndex)
-
-            saveWidth = format.getInteger(MediaFormat.KEY_WIDTH) * scalePercent / 100
-            saveHeight = format.getInteger(MediaFormat.KEY_HEIGHT) * scalePercent / 100
+            val rotation = if (format.containsKey(MediaFormat.KEY_ROTATION)) format.getInteger((MediaFormat.KEY_ROTATION))
+            else 0
+            saveWidth = if(rotation == 90 || rotation == 270) format.getInteger(MediaFormat.KEY_HEIGHT)
+            else format.getInteger(MediaFormat.KEY_WIDTH)
+            saveHeight = if(rotation == 90 || rotation == 270) format.getInteger(MediaFormat.KEY_WIDTH)
+            else format.getInteger(MediaFormat.KEY_HEIGHT)
             log(
                 "Video size is " + format.getInteger(MediaFormat.KEY_WIDTH) + "x" +
                         format.getInteger(MediaFormat.KEY_HEIGHT)
@@ -539,7 +542,7 @@ class MediaCodecExtractImage {
 
                             outputSurface.awaitNewImage()
                             log("awaitNewImage passed: $decodeCount")
-                            outputSurface.drawImage(true)
+                            outputSurface.drawImage()
                             log("drawImage passed: $decodeCount")
                             val startWhen = System.nanoTime()
                             try {
@@ -682,7 +685,7 @@ class MediaCodecExtractImage {
 
                             if (desiredFrames.contains(decodeCount)) {
                                 outputSurface.awaitNewImage()
-                                outputSurface.drawImage(true)
+                                outputSurface.drawImage()
                                 val outputFile = File(
                                     outputPath,
                                     String.format("frame-%03d.jpg", frameCounter)
