@@ -118,9 +118,12 @@ class MediaCodecExtractImage {
         extractor.selectTrack(videoTrackIndex)
 
         val format = extractor.getTrackFormat(videoTrackIndex)
-
-        val videoWidth = format.getInteger(MediaFormat.KEY_WIDTH)
-        val videoHeight = format.getInteger(MediaFormat.KEY_HEIGHT)
+        val rotation = if (format.containsKey(MediaFormat.KEY_ROTATION)) format.getInteger((MediaFormat.KEY_ROTATION))
+                       else 0
+        val videoWidth = if(rotation == 90 || rotation == 270) format.getInteger(MediaFormat.KEY_HEIGHT)
+                         else format.getInteger(MediaFormat.KEY_WIDTH)
+        val videoHeight = if(rotation == 90 || rotation == 270) format.getInteger(MediaFormat.KEY_WIDTH)
+                          else format.getInteger(MediaFormat.KEY_HEIGHT)
         log(
             "Video size is " + format.getInteger(MediaFormat.KEY_WIDTH) + "x" +
                     format.getInteger(MediaFormat.KEY_HEIGHT)
@@ -166,8 +169,7 @@ class MediaCodecExtractImage {
             cancelable.cancel.set(false)
             val startTime = System.currentTimeMillis()
             //var outputSurface = this.outputSurface
-            val saveWidth: Int
-            val saveHeight: Int
+
 //            if (emitter.isDisposed)
 //                return@create
             extractor = MediaExtractor()
@@ -194,10 +196,10 @@ class MediaCodecExtractImage {
             val format = extractor!!.getTrackFormat(videoTrackIndex)
             val rotation = if (format.containsKey(MediaFormat.KEY_ROTATION)) format.getInteger((MediaFormat.KEY_ROTATION))
             else 0
-            saveWidth = if(rotation == 90 || rotation == 270) format.getInteger(MediaFormat.KEY_HEIGHT)
-            else format.getInteger(MediaFormat.KEY_WIDTH)
-            saveHeight = if(rotation == 90 || rotation == 270) format.getInteger(MediaFormat.KEY_WIDTH)
-            else format.getInteger(MediaFormat.KEY_HEIGHT)
+            val saveWidth = if(rotation == 90 || rotation == 270) format.getInteger(MediaFormat.KEY_HEIGHT)
+                            else format.getInteger(MediaFormat.KEY_WIDTH)
+            val saveHeight = if(rotation == 90 || rotation == 270) format.getInteger(MediaFormat.KEY_WIDTH)
+                             else format.getInteger(MediaFormat.KEY_HEIGHT)
             log(
                 "Video size is " + format.getInteger(MediaFormat.KEY_WIDTH) + "x" +
                         format.getInteger(MediaFormat.KEY_HEIGHT)
@@ -237,6 +239,7 @@ class MediaCodecExtractImage {
                 decoder!!,
                 outputSurface!!,
                 photoQuality,
+                scalePercent,
                 totalFrame,
                 realStartTime,
                 cancelable,
@@ -430,6 +433,7 @@ class MediaCodecExtractImage {
             decoder: MediaCodec,
             outputSurface: CodecOutputSurface,
             photoQuality: Int,
+            scalePercent: Int,
             totalFrame: Int,
             startTime: Long,
             cancel: Cancelable,
@@ -546,7 +550,7 @@ class MediaCodecExtractImage {
                             log("drawImage passed: $decodeCount")
                             val startWhen = System.nanoTime()
                             try {
-                                surfaceToFlowChannel.send(outputSurface.frameToArray(photoQuality))
+                                surfaceToFlowChannel.send(outputSurface.frameToArray(photoQuality, scalePercent))
                                 log("surfaceToFlowChannel sent: $decodeCount")
                             } catch (e:java.lang.Exception){
                                 e.printStackTrace()

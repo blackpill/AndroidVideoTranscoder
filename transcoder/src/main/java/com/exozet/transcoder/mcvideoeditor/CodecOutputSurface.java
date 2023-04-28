@@ -307,6 +307,9 @@ import static com.exozet.transcoder.ffmpeg.DebugExtensions.log;
             log(TAG, "Saved " + mWidth + "x" + mHeight + " frame as '" + filename + "'");
     }
     public byte[] frameToArray(int photoQuality) throws IOException {
+        return frameToArray(photoQuality, 100);
+    }
+    public byte[] frameToArray(int photoQuality, int scale) throws IOException {
     // glReadPixels gives us a ByteBuffer filled with what is essentially big-endian RGBA
     // data (i.e. a byte of red, followed by a byte of green...).  To use the Bitmap
     // constructor that takes an int[] array with pixel data, we need an int[] filled
@@ -350,9 +353,11 @@ import static com.exozet.transcoder.ffmpeg.DebugExtensions.log;
         Bitmap bmp = Bitmap.createBitmap(mWidth, mHeight, Bitmap.Config.ARGB_8888);
         mPixelBuf.rewind();
         bmp.copyPixelsFromBuffer(mPixelBuf);
-        bmp.compress(Bitmap.CompressFormat.JPEG, photoQuality, bos);
+        Bitmap resizeBmp = Bitmap.createScaledBitmap(bmp, bmp.getWidth() * scale / 100, bmp.getHeight() * scale / 100, false);
+        resizeBmp.compress(Bitmap.CompressFormat.JPEG, photoQuality, bos);
         result = bos.toByteArray();
         bmp.recycle();
+        resizeBmp.recycle();
     } finally {
         if (bos != null) bos.close();
     }
