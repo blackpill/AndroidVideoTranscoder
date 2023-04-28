@@ -76,13 +76,19 @@ import static com.exozet.transcoder.ffmpeg.DebugExtensions.log;
         /**
          * Draws the external texture in SurfaceTexture onto the current EGL surface.
          */
-        public void drawFrame(SurfaceTexture st) {
+        public void drawFrame(SurfaceTexture st, int rotation) {
             checkGlError("onDrawFrame start");
             st.getTransformMatrix(mSTMatrix);
 //                mSTMatrix[5] = -mSTMatrix[5];
 //                mSTMatrix[13] = 1.0f - mSTMatrix[13];
-            Matrix.rotateM(mSTMatrix, 0, 180, 0, 0, 1);
-            Matrix.translateM(mSTMatrix, 0, -1, -1, 0);
+            mSTMatrix = new float[]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1}; //original
+            if(rotation == 90) {
+                // mSTMatrix = new float[]{0,-1,0,0,1,0,0,0,0,0,1,0,0,1,0,1}; // rotation 90
+                //for rotation = 90
+                // rotate and must move back to the first quadrant, then we can see the image
+                Matrix.rotateM(mSTMatrix, 0, 270, 0, 0, 1);
+                Matrix.translateM(mSTMatrix, 0, -1, 0, 0);
+            }
 
             // (optional) clear to green so we can see if we're failing to set pixels
             GLES20.glClearColor(0.0f, 1.0f, 0.0f, 1.0f);

@@ -243,7 +243,8 @@ class MediaCodecExtractImage {
                 totalFrame,
                 realStartTime,
                 cancelable,
-                pauseable
+                pauseable,
+                rotation
             )
         }
         return flow {
@@ -311,6 +312,8 @@ class MediaCodecExtractImage {
             extractor!!.selectTrack(videoTrackIndex)
 
             val format = extractor!!.getTrackFormat(videoTrackIndex)
+            val rotation = if(format.containsKey(MediaFormat.KEY_ROTATION)) format.getInteger(MediaFormat.KEY_ROTATION)
+                           else 0
 
             saveWidth = format.getInteger(MediaFormat.KEY_WIDTH)
             saveHeight = format.getInteger(MediaFormat.KEY_HEIGHT)
@@ -356,7 +359,8 @@ class MediaCodecExtractImage {
                 emitter,
                 totalFrame,
                 startTime,
-                cancelable
+                cancelable,
+                rotation
             )
 
         }.doOnDispose {
@@ -437,7 +441,8 @@ class MediaCodecExtractImage {
             totalFrame: Int,
             startTime: Long,
             cancel: Cancelable,
-            pause: Pauseable
+            pause: Pauseable,
+            rotation: Int
         ) {
             val TIMEOUT_USEC = 10000
             val decoderInputBuffers = decoder.inputBuffers
@@ -546,7 +551,7 @@ class MediaCodecExtractImage {
 
                             outputSurface.awaitNewImage()
                             log("awaitNewImage passed: $decodeCount")
-                            outputSurface.drawImage()
+                            outputSurface.drawImage(rotation)
                             log("drawImage passed: $decodeCount")
                             val startWhen = System.nanoTime()
                             try {
@@ -584,7 +589,8 @@ class MediaCodecExtractImage {
             observer: ObservableEmitter<Progress>,
             totalFrame: Int,
             startTime: Long,
-            cancel: Cancelable
+            cancel: Cancelable,
+            rotation: Int
         ) {
             val TIMEOUT_USEC = 10000
             val decoderInputBuffers = decoder.inputBuffers
@@ -689,7 +695,7 @@ class MediaCodecExtractImage {
 
                             if (desiredFrames.contains(decodeCount)) {
                                 outputSurface.awaitNewImage()
-                                outputSurface.drawImage()
+                                outputSurface.drawImage(rotation)
                                 val outputFile = File(
                                     outputPath,
                                     String.format("frame-%03d.jpg", frameCounter)

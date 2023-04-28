@@ -236,8 +236,8 @@ import static com.exozet.transcoder.ffmpeg.DebugExtensions.log;
      * Draws the data from SurfaceTexture onto the current EGL surface.
      *
      */
-    public void drawImage() {
-        mTextureRender.drawFrame(mSurfaceTexture);
+    public void drawImage(int rotation) {
+        mTextureRender.drawFrame(mSurfaceTexture, rotation);
     }
 
     // SurfaceTexture callback
