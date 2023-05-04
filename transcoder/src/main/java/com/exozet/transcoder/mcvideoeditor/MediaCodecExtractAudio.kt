@@ -114,13 +114,16 @@ class MediaCodecExtractAudio {
                     bytesRead += bytesToRead
                 }
 
-
                 if (bytesRead >= mergedPacketSize) { // All bytes are read, then begin fetching the next sample
                     val sampleSize = mediaExtractor.readSampleData(this.samplePacketBuffer!!, 0)
                     if (sampleSize >= 0) {
+                        val trackFormat = mediaExtractor.getTrackFormat(audioTrackIndex)
+                        val aacProfile = trackFormat.getInteger(MediaFormat.KEY_AAC_PROFILE)
+                        val sampleRate = trackFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                        val channelCount = trackFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
                         val adtsArray = ByteArray(7)
                         mergedPacketSize = sampleSize + 7
-                        addADTStoPacket(adtsArray, mergedPacketSize)
+                        addADTStoPacket(adtsArray, mergedPacketSize, aacProfile, sampleRate, channelCount)
                         mergedPacketArray = adtsArray + this.samplePacketBuffer!!.array()
                         bytesRead = 0
                         mediaExtractor.advance()
@@ -209,6 +212,8 @@ class MediaCodecExtractAudio {
         val format = extractor.getTrackFormat(audioTrackId)
         val durationUs = format.getLong(MediaFormat.KEY_DURATION)
         val sampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+        val aacProfile = format.getInteger(MediaFormat.KEY_AAC_PROFILE)
+        val channelCount = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
 
         if (format.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)) {
             val newSize = format.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE)
@@ -253,7 +258,7 @@ class MediaCodecExtractAudio {
                     break
                 } else {
                     bufferInfo.flags = extractor.sampleFlags
-                    addADTStoPacket(adtsArray, dstBufLength)
+                    addADTStoPacket(adtsArray, dstBufLength, aacProfile, sampleRate, channelCount)
                     dstBufArray = adtsArray + dstBuf.array()
                     flowCollector.emit(dstBufArray)
                     extractor.advance()
@@ -270,12 +275,29 @@ class MediaCodecExtractAudio {
      *
      * Note the packetLen must count in the ADTS header itself.
      */
-    private fun addADTStoPacket(packet: ByteArray, packetLen: Int) {
-        // TODO: shouldn't be fixed
-        val profile = 2 //AAC LC
+    private fun addADTStoPacket(packet: ByteArray, packetLen: Int, aacProfile: Int, sampleRate: Int, channelCount: Int) {
+        val profile = aacProfile //AAC LC
         //39=MediaCodecInfo.CodecProfileLevel.AACObjectELD;
-        val freqIdx = 4 //44.1KHz
-        val chanCfg = 2 //CPE
+        val freqIdx = when(sampleRate) {
+            96000 -> 0
+            88200 -> 1
+            64000 -> 2
+            48000 -> 3
+            44100 -> 4
+            32000 -> 5
+            24000 -> 6
+            22050 -> 7
+            16000 -> 8
+            12000 -> 9
+            11025 -> 10
+            8000 -> 11
+            7350 -> 12
+            else -> 4
+        } //44.1KHz
+        val chanCfg = when (channelCount) {
+            8 -> 7
+            else -> channelCount
+        }
 
         // fill in ADTS data
         packet[0] = 0xFF.toByte()
