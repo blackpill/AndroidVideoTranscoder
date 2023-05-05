@@ -95,6 +95,12 @@ class MediaCodecExtractAudio {
                 }
             }
 
+            fun resetToInit() {
+                mediaExtractor.seekTo(0, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+                mergedPacketSize = 0
+                bytesRead = 0
+            }
+
             override fun read(): Int {
                 val buffer = ByteArray(1)
                 return if (read(buffer) != -1) buffer[0].toInt() and 0xff else -1
@@ -102,10 +108,12 @@ class MediaCodecExtractAudio {
 
             override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
                 if (audioTrackIndex == -1 || this.samplePacketBuffer == null) {
+                    resetToInit()
                     return -1
                 }
 
                 if (mergedPacketSize == -1) {
+                    resetToInit()
                     return -1
                 }
                 var bytesToRead = minOf(length, mergedPacketSize)

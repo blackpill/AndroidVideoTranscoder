@@ -75,6 +75,7 @@ class MediaCodecExtractImage {
     private val coroutineScope = CoroutineScope(SupervisorJob() + eglDispatcher + coroutineExceptionHandler)
     private var outputDone = false
     private var surfaceToFlowChannel = Channel<ByteArray>()
+    private val released = AtomicBoolean(false)
     fun pause(){
         pauseable.pause.set(true)
     }
@@ -132,9 +133,12 @@ class MediaCodecExtractImage {
         val frameRate = format.getInteger(MediaFormat.KEY_FRAME_RATE)
         val duration = format.getLong(MediaFormat.KEY_DURATION)
         val valuePacket = JSONObject()
+        val MAX_FRAME_RATE = 24
+        val adjustedFrameRate = if(frameRate > MAX_FRAME_RATE) MAX_FRAME_RATE
+                                else frameRate
 
         valuePacket.put("duration", duration)
-        valuePacket.put("frameRate", frameRate)
+        valuePacket.put("frameRate", adjustedFrameRate)
         valuePacket.put("videoWidth", videoWidth)
         valuePacket.put("videoHeight", videoHeight)
         return valuePacket
@@ -206,6 +210,7 @@ class MediaCodecExtractImage {
             )
 
             val frameRate = format.getInteger(MediaFormat.KEY_FRAME_RATE)
+
             val duration = format.getLong(MediaFormat.KEY_DURATION)
 
             val secToMicroSec = 1000000
@@ -244,13 +249,20 @@ class MediaCodecExtractImage {
                 realStartTime,
                 cancelable,
                 pauseable,
-                rotation
+                rotation,
+                frameRate
             )
         }
         return flow {
             while(!(outputDone && surfaceToFlowChannel.isEmpty) && !cancelable.cancel.get()) {
                 try {
-                    emit(surfaceToFlowChannel.receive())
+                    if(!surfaceToFlowChannel.isEmpty) {
+                        Log.d(
+                            "flow",
+                            "outputDone = $outputDone, isEmpty = {$surfaceToFlowChannel.isEmpty}, cancel = {$cancelable.cancel.get()}"
+                        )
+                        emit(surfaceToFlowChannel.receive())
+                    }
                 } catch (e: Exception) {
                     if(e !is java.util.concurrent.CancellationException) {
                         e.printStackTrace()
@@ -259,7 +271,17 @@ class MediaCodecExtractImage {
             }
         }.onCompletion {
             release(outputSurface, decoder, extractor)
+            reset()
         }
+    }
+    fun reset(){
+        pauseable.pause.set(false)
+        cancelable.cancel.set(false)
+        currentDecodeFrame.set(0)
+        releasedLatch = CountDownLatch(0)
+        outputDone = false
+        surfaceToFlowChannel = Channel<ByteArray>()
+        released.set(false)
     }
     fun extractMpegFrames(
         inputVideo: Uri,
@@ -426,10 +448,38 @@ class MediaCodecExtractImage {
         private const val TAG = "ExtractMpegFrames"
     }
 
-        /**
-         * Work loop.
-         */
-
+    private fun getFrameIds(frameRate: Int): List<Int>{
+        val frameIds = mutableListOf<Int>()
+        for(i in 0 .. frameRate - 1){
+            frameIds.add(i)
+        }
+        val MAX_FRAME_RATE = 24
+        if(frameRate <= MAX_FRAME_RATE) {
+            return frameIds
+        }else{
+            val framesToDrop = frameRate - MAX_FRAME_RATE
+            return getDropFrameIdsOneRound(frameIds, framesToDrop)
+        }
+    }
+    private fun getDropFrameIdsOneRound(frameIds: MutableList<Int>, dropFrameCount: Int):MutableList<Int>{
+        var dropFrameLeft = dropFrameCount
+        if(dropFrameCount == 0) {
+            return frameIds
+        }else{
+            val dropStep = if(frameIds.size % dropFrameCount == 0){
+                frameIds.size / dropFrameCount
+            }else{
+                frameIds.size / dropFrameCount + 1
+            }
+            var i = 0
+            while(i<frameIds.size){
+                frameIds.removeAt(i)
+                dropFrameLeft -= 1
+                i = i - 1 + dropStep
+            }
+            return getDropFrameIdsOneRound(frameIds, dropFrameLeft)
+        }
+    }
         @Throws(IOException::class)
         internal suspend fun doExtractToFlow(
             extractor: MediaExtractor,
@@ -442,17 +492,17 @@ class MediaCodecExtractImage {
             startTime: Long,
             cancel: Cancelable,
             pause: Pauseable,
-            rotation: Int
+            rotation: Int,
+            frameRate: Int
         ) {
             val TIMEOUT_USEC = 10000
             val decoderInputBuffers = decoder.inputBuffers
             val info = MediaCodec.BufferInfo()
             var inputChunk = this.currentDecodeFrame.get()
             var decodeCount = this.currentDecodeFrame.get()
-            var frameSaveTime: Long = 0
-            var frameCounter = 0
-
             var inputDone = false
+
+            val frameIds = getFrameIds(frameRate)
             extractor.seekTo(startTime, SEEK_TO_PREVIOUS_SYNC)
             while (!outputDone && !pause.pause.get()) {
 
@@ -551,19 +601,21 @@ class MediaCodecExtractImage {
 
                             outputSurface.awaitNewImage()
                             log("awaitNewImage passed: $decodeCount")
-                            outputSurface.drawImage(rotation)
-                            log("drawImage passed: $decodeCount")
-                            val startWhen = System.nanoTime()
-                            try {
-                                surfaceToFlowChannel.send(outputSurface.frameToArray(photoQuality, scalePercent))
-                                log("surfaceToFlowChannel sent: $decodeCount")
-                            } catch (e:java.lang.Exception){
-                                e.printStackTrace()
+                            if(frameIds.size == frameRate || frameIds.contains(decodeCount % frameRate)) {
+                                outputSurface.drawImage(rotation)
+                                log("drawImage passed: $decodeCount")
+                                try {
+                                    surfaceToFlowChannel.send(
+                                        outputSurface.frameToArray(
+                                            photoQuality,
+                                            scalePercent
+                                        )
+                                    )
+                                    log("surfaceToFlowChannel sent: $decodeCount")
+                                } catch (e: java.lang.Exception) {
+                                    e.printStackTrace()
+                                }
                             }
-
-
-                            frameSaveTime += System.nanoTime() - startWhen
-                            frameCounter++
 
                             log("saving frames $decodeCount")
 
@@ -736,23 +788,21 @@ class MediaCodecExtractImage {
 
             observer.onComplete()
         }
-    private val released = AtomicBoolean(false)
 
-        private fun release(
-            outputSurface: CodecOutputSurface?,
-            decoder: MediaCodec?,
-            extractor: MediaExtractor?
-        ) {
-            if(!released.getAndSet(true)) {
-                outputSurface?.release()
-                decoder?.stop()
-                decoder?.release()
-                extractor?.release()
-                cancelable.cancel.set(false)
-                releasedLatch.countDown()
-                Log.d("worker", "releasedLatch set 0")
+    private fun release(
+        outputSurface: CodecOutputSurface?,
+        decoder: MediaCodec?,
+        extractor: MediaExtractor?
+    ) {
+        if(!released.getAndSet(true)) {
+            outputSurface?.release()
+            decoder?.stop()
+            decoder?.release()
+            extractor?.release()
+            cancelable.cancel.set(false)
+            releasedLatch.countDown()
+            Log.d("worker", "releasedLatch set 0")
 
-            }
         }
-
+    }
 }
