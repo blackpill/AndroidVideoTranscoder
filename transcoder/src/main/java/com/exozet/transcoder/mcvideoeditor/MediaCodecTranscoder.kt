@@ -37,17 +37,28 @@ object MediaCodecTranscoder {
 
         return mediaCodec.extractMpegFrames(inputVideo, frameTimes, Uri.parse(localSavePath), photoQuality, context)
     }
-
+    fun getCurrentTime():Double{
+        return videoExtractor.currentTime
+    }
+    fun seekAndFetchOneFrame(
+        context: Context,
+        inputVideo: Uri,
+        @IntRange(from = 1, to = 100) photoQuality: Int = 100,
+        @IntRange(from = 1, to = 100) scalePercent: Int = 100,
+        seekTime: Double = (-1).toDouble(),
+    ):ByteArray{
+        audioExtractor.seek(seekTime)
+        return videoExtractor.seekAndFetchOneFrame(inputVideo, photoQuality, context, scalePercent, seekTime)
+    }
     fun extractFramesFromVideoToFlow(
         context: Context,
         inputVideo: Uri,
         @IntRange(from = 1, to = 100) photoQuality: Int = 100,
         @IntRange(from = 1, to = 100) scalePercent: Int = 100,
-        videoStartTime: Double = 0.0,
         videoEndTime: Double = (-1).toDouble(),
         loop: Boolean = true
     ): Flow<ByteArray> {
-        return videoExtractor.extractMpegFramesToFlow(inputVideo, photoQuality, context, scalePercent, videoStartTime, videoEndTime, loop)
+        return videoExtractor.extractMpegFramesToFlow(inputVideo, photoQuality, context, scalePercent, videoEndTime, loop)
     }
     fun getMetaInfo(
         context: Context,
@@ -62,12 +73,11 @@ object MediaCodecTranscoder {
         audioEndTime: Double = (-1).toDouble(),
         loop: Boolean = true
     ): Flow<ByteArray> {
-        return audioExtractor.extractAudioToFlow(inputVideo, context, audioStartTime, audioEndTime, loop)
+        return audioExtractor.extractAudioToFlow(inputVideo, context, audioStartTime, loop)
     }
     fun extractAudioFromVideoToStream(
         context: Context,
         inputVideo: Uri,
-        audioStartTime: Double = 0.0,
         audioEndTime: Double = (-1).toDouble(),
         loop: Boolean = true
     ): InputStream {

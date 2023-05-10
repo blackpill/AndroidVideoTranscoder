@@ -68,6 +68,11 @@ class MediaCodecExtractAudio {
     private val eglDispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
     private val coroutineScope = CoroutineScope(SupervisorJob() + eglDispatcher + coroutineExceptionHandler)
     private var currentSampleTime: Long = 0
+    private var seekTime = 0.0
+
+    fun seek(time:Double) {
+        seekTime = time
+    }
 
     fun extractAudioToStream(inputVideo: Uri, context: Context?): InputStream {
         val inputStream = object : InputStream() {
@@ -78,6 +83,7 @@ class MediaCodecExtractAudio {
             private var mergedPacketArray: ByteArray? = null
             private var mergedPacketSize: Int = 0
             private var bytesRead = 0 //The number of bytes in packet already been read
+            private var offsetToSkip = 0 //To skip the specific bytes, after extractor.seekTo(), there may be offset to skip in the sample
 
             init {
                 val headers = mapOf("User-Agent" to "media converter")
@@ -99,6 +105,7 @@ class MediaCodecExtractAudio {
                 mediaExtractor.seekTo(0, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
                 mergedPacketSize = 0
                 bytesRead = 0
+                seekTime = 0.0
             }
 
             override fun read(): Int {
@@ -123,6 +130,10 @@ class MediaCodecExtractAudio {
                 }
 
                 if (bytesRead >= mergedPacketSize) { // All bytes are read, then begin fetching the next sample
+                    if(bytesRead == 0 && mergedPacketSize == 0) {
+                        mediaExtractor.seekTo((seekTime * 1000000).toLong(),
+                            MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+                    }
                     val sampleSize = mediaExtractor.readSampleData(this.samplePacketBuffer!!, 0)
                     if (sampleSize >= 0) {
                         val trackFormat = mediaExtractor.getTrackFormat(audioTrackIndex)
@@ -143,6 +154,21 @@ class MediaCodecExtractAudio {
                 return bytesToRead
             }
 
+//            override fun skip(bytesToSkip: Long): Long {
+//                // translate bytesToSkip to audio time in us and packet offset, and extractor.seekTo
+//                // the size of every readsample(frame = 1024 samples) must be the same
+//                val trackFormat = mediaExtractor.getTrackFormat(audioTrackIndex)
+//                val sampleRate = trackFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+//                val sampleSize = mediaExtractor.sampleSize
+//                val sampleTimeInUs = 1000000*1024 / sampleRate
+//                val ADTS_LENGTH = 7
+//                val skipTimeInUs:Int = (bytesToSkip * 1000000 * 1024) / ((ADTS_LENGTH + sampleSize) * sampleRate)
+//                offsetToSkip = (bytesToSkip * 1000000 * 1024) % ((ADTS_LENGTH + sampleSize) * sampleRate)
+//                mediaExtractor.seekTo(skipTimeInUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+//
+//                return super.skip(bytesToSkip)
+//            }
+
             override fun close() {
                 mediaExtractor.release()
             }
@@ -155,13 +181,12 @@ class MediaCodecExtractAudio {
     fun extractAudioToFlow(
         inputVideo: Uri,
         context: Context? = null,
-        audioStartTime: Double = 0.0,
         audioEndTime: Double = (-1).toDouble(),
         loop: Boolean = true
     ): Flow<ByteArray> {
         return flow {
             extractor = MediaExtractor()
-            doExtractAudioToFlow(extractor, context, inputVideo, this, audioStartTime)
+            doExtractAudioToFlow(extractor, context, inputVideo, this)
         }.onCompletion {
             //release(outputSurface, decoder, extractor)
             Log.d(TAG, "complete")
@@ -182,7 +207,6 @@ class MediaCodecExtractAudio {
         context: Context?,
         inputVideo: Uri,
         flowCollector: FlowCollector<ByteArray>,
-        audioStartTime: Double = -1.0,
         endMs: Int = -1
     ) {
         val headers = mapOf("User-Agent" to "media converter")
@@ -236,7 +260,7 @@ class MediaCodecExtractAudio {
 //        retrieverSrc.setDataSource(context, inputVideo)
         val secToMicroSec = 1000000
         val realStartTime: Long =
-            if (audioStartTime > 0.01) (audioStartTime * secToMicroSec).toLong()
+            if (seekTime > 0.00) (seekTime * secToMicroSec).toLong()
             else this@MediaCodecExtractAudio.currentSampleTime
         if (realStartTime > 0.01) {
             extractor.seekTo(realStartTime, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
