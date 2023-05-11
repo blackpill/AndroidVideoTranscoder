@@ -21,10 +21,7 @@ import android.media.*
 import android.media.MediaExtractor.SEEK_TO_PREVIOUS_SYNC
 import android.net.Uri
 import android.util.Log
-import com.exozet.transcoder.ffmpeg.Progress
 import com.exozet.transcoder.ffmpeg.log
-import io.reactivex.Observable
-import io.reactivex.ObservableEmitter
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
@@ -62,7 +59,8 @@ import java.util.concurrent.atomic.AtomicInteger
 class MediaCodecExtractImage {
     //private var decoder: MediaCodec? = null
     //private lateinit var outputSurface: CodecOutputSurface
-    //private var extractor: MediaExtractor? = null
+    private var extractor = MediaExtractor()
+    private var videoTrackIndex = -1
     private val pauseable = Pauseable()
     private val cancelable = Cancelable()
     private val currentDecodeFrame = AtomicInteger(0)
@@ -77,6 +75,29 @@ class MediaCodecExtractImage {
     private var surfaceToFlowChannel = Channel<ByteArray>()
     private val released = AtomicBoolean(false)
     var currentTime:Double = 0.0
+
+    //MediaExtractor must be initialed and released manually
+    private fun initExtractor(inputVideo: Uri, context: Context?){
+        extractor = MediaExtractor()
+        if (inputVideo.scheme == null || inputVideo.scheme == "file") {
+            val inputFilePath = inputVideo.path
+            val inputFile = File(inputFilePath!!)   // must be an absolute path
+            // The MediaExtractor error messages aren't very useful.  Check to see if the input
+            // file exists so we can throw a better one if it's not there.
+            if (!inputFile.canRead()) {
+                throw FileNotFoundException("Unable to read $inputFile")
+            }
+            extractor.setDataSource(inputFile.toString())
+        } else {
+            val headers = mapOf("User-Agent" to "media converter")
+            extractor.setDataSource(context!!, inputVideo, headers)
+        }
+        videoTrackIndex = getTrackId(extractor, "video")
+        if (videoTrackIndex < 0) {
+            throw RuntimeException("No video track found in $inputVideo")
+        }
+        extractor.selectTrack(videoTrackIndex) // only take effect once
+    }
     fun pause(){
         pauseable.pause.set(true)
     }
@@ -98,26 +119,7 @@ class MediaCodecExtractImage {
         inputVideo: Uri,
         context: Context? = null,
     ): JSONObject {
-        val extractor = MediaExtractor()
-        if (inputVideo.scheme == null || inputVideo.scheme == "file") {
-            val inputFilePath = inputVideo.path
-            val inputFile = File(inputFilePath!!)   // must be an absolute path
-            // The MediaExtractor error messages aren't very useful.  Check to see if the input
-            // file exists so we can throw a better one if it's not there.
-            if (!inputFile.canRead()) {
-                throw FileNotFoundException("Unable to read $inputFile")
-            }
-            extractor.setDataSource(inputFile.toString())
-        } else {
-            val headers = mapOf("User-Agent" to "media converter")
-            extractor.setDataSource(context!!, inputVideo, headers)
-        }
-
-        val videoTrackIndex = getTrackId(extractor, "video")
-        if (videoTrackIndex < 0) {
-            throw RuntimeException("No video track found in $inputVideo")
-        }
-        extractor.selectTrack(videoTrackIndex)
+        initExtractor(inputVideo, context)
 
         val format = extractor.getTrackFormat(videoTrackIndex)
         val rotation = if (format.containsKey(MediaFormat.KEY_ROTATION)) format.getInteger((MediaFormat.KEY_ROTATION))
@@ -142,6 +144,7 @@ class MediaCodecExtractImage {
         valuePacket.put("frameRate", adjustedFrameRate)
         valuePacket.put("videoWidth", videoWidth)
         valuePacket.put("videoHeight", videoHeight)
+        extractor.release()
         return valuePacket
     }
     /**
@@ -162,36 +165,16 @@ class MediaCodecExtractImage {
     ): ByteArray {
         Log.d("worker", "releasedLatch.await() start")
         releasedLatch.await()
+        initExtractor(inputVideo, context)
         Log.d("worker", "releasedLatch.await() passed")
         currentTime = videoStartTime
-        var decoder: MediaCodec? = null
-        var extractor: MediaExtractor? = null
-        var outputSurface: CodecOutputSurface? = null
-        var frameArray = ByteArray(0)
+        var decoder: MediaCodec?
+//        var extractor: MediaExtractor? = null
+        var outputSurface: CodecOutputSurface?
+        var frameArray: ByteArray
         released.getAndSet(false)
         runBlocking {
-            extractor = MediaExtractor()
-            if (inputVideo.scheme == null || inputVideo.scheme == "file") {
-                val inputFilePath = inputVideo.path
-                val inputFile = File(inputFilePath!!)   // must be an absolute path
-                // The MediaExtractor error messages aren't very useful.  Check to see if the input
-                // file exists so we can throw a better one if it's not there.
-                if (!inputFile.canRead()) {
-                    throw FileNotFoundException("Unable to read $inputFile")
-                }
-                extractor!!.setDataSource(inputFile.toString())
-            } else {
-                val headers = mapOf("User-Agent" to "media converter")
-                extractor!!.setDataSource(context!!, inputVideo, headers)
-            }
-
-            val videoTrackIndex = getTrackId(extractor!!, "video")
-            if (videoTrackIndex < 0) {
-                throw RuntimeException("No video track found in $inputVideo")
-            }
-            extractor!!.selectTrack(videoTrackIndex)
-
-            val format = extractor!!.getTrackFormat(videoTrackIndex)
+            val format = extractor.getTrackFormat(videoTrackIndex)
             val rotation = if (format.containsKey(MediaFormat.KEY_ROTATION)) format.getInteger((MediaFormat.KEY_ROTATION))
             else 0
             val saveWidth = if(rotation == 90 || rotation == 270) format.getInteger(MediaFormat.KEY_HEIGHT)
@@ -212,7 +195,7 @@ class MediaCodecExtractImage {
             val realStartTime: Long =
                 if (videoStartTime > 0.01) (videoStartTime * secToMicroSec).toLong()
                 else this@MediaCodecExtractImage.currentDecodeFrame.get() * secToMicroSec.toLong() / frameRate
-            extractor!!.seekTo(realStartTime, SEEK_TO_PREVIOUS_SYNC)
+            extractor.seekTo(realStartTime, SEEK_TO_PREVIOUS_SYNC)
             log(
                 "Frame rate is = " + frameRate +
                         " Total duration is in microSec = " + duration +
@@ -233,60 +216,37 @@ class MediaCodecExtractImage {
             //NOTE: outputSurface should not be in flow, when switch thread, the EGLContext will change.
             //So I use a channel in Flow to receive and emit data
             frameArray = extractOneFrame(
-                extractor!!,
+                extractor,
                 videoTrackIndex,
                 decoder!!,
                 outputSurface!!,
                 photoQuality,
                 scalePercent,
-                totalFrame,
-                rotation,
-                frameRate
+                rotation
             )
             release(outputSurface, decoder, extractor)
         }
         return frameArray
     }
+    @OptIn(ExperimentalCoroutinesApi::class)
     fun extractMpegFramesToFlow(
         inputVideo: Uri,
         photoQuality: Int,
         context: Context? = null,
-        scalePercent: Int = 100,
-        videoEndTime: Double = (-1).toDouble(),
-        loop: Boolean = true
+        scalePercent: Int = 100
     ): Flow<ByteArray> {
         Log.d("worker", "releasedLatch.await() start")
         releasedLatch.await()
         Log.d("worker", "releasedLatch.await() passed")
+        initExtractor(inputVideo, context)
         var decoder: MediaCodec? = null
-        var extractor: MediaExtractor? = null
+//        var extractor: MediaExtractor? = null
         var outputSurface: CodecOutputSurface? = null
         released.getAndSet(false)
         coroutineScope.launch {
             pauseable.pause.set(false)
             cancelable.cancel.set(false)
-            extractor = MediaExtractor()
-            if (inputVideo.scheme == null || inputVideo.scheme == "file") {
-                val inputFilePath = inputVideo.path
-                val inputFile = File(inputFilePath!!)   // must be an absolute path
-                // The MediaExtractor error messages aren't very useful.  Check to see if the input
-                // file exists so we can throw a better one if it's not there.
-                if (!inputFile.canRead()) {
-                    throw FileNotFoundException("Unable to read $inputFile")
-                }
-                extractor!!.setDataSource(inputFile.toString())
-            } else {
-                val headers = mapOf("User-Agent" to "media converter")
-                extractor!!.setDataSource(context!!, inputVideo, headers)
-            }
-
-            val videoTrackIndex = getTrackId(extractor!!, "video")
-            if (videoTrackIndex < 0) {
-                throw RuntimeException("No video track found in $inputVideo")
-            }
-            extractor!!.selectTrack(videoTrackIndex)
-
-            val format = extractor!!.getTrackFormat(videoTrackIndex)
+            val format = extractor.getTrackFormat(videoTrackIndex)
             val rotation = if (format.containsKey(MediaFormat.KEY_ROTATION)) format.getInteger((MediaFormat.KEY_ROTATION))
             else 0
             val saveWidth = if(rotation == 90 || rotation == 270) format.getInteger(MediaFormat.KEY_HEIGHT)
@@ -307,7 +267,7 @@ class MediaCodecExtractImage {
             val realStartTime: Long =
                 if (currentTime > 0.01) (currentTime * secToMicroSec).toLong()
                 else this@MediaCodecExtractImage.currentDecodeFrame.get() * secToMicroSec.toLong() / frameRate
-            extractor!!.seekTo(realStartTime, SEEK_TO_PREVIOUS_SYNC)
+            extractor.seekTo(realStartTime, SEEK_TO_PREVIOUS_SYNC)
             log(
                 "Frame rate is = " + frameRate +
                         " Total duration is in microSec = " + duration +
@@ -328,14 +288,13 @@ class MediaCodecExtractImage {
             //NOTE: outputSurface should not be in flow, when switch thread, the EGLContext will change.
             //So I use a channel in Flow to receive and emit data
             doExtractToFlow(
-                extractor!!,
+                extractor,
                 videoTrackIndex,
                 decoder!!,
                 outputSurface!!,
                 photoQuality,
                 scalePercent,
                 totalFrame,
-                cancelable,
                 pauseable,
                 rotation,
                 frameRate
@@ -362,147 +321,16 @@ class MediaCodecExtractImage {
             reset()
         }
     }
-    fun reset(){
+    private fun reset(){
         pauseable.pause.set(false)
         cancelable.cancel.set(false)
         currentDecodeFrame.set(0)
         releasedLatch = CountDownLatch(0)
         outputDone = false
-        surfaceToFlowChannel = Channel<ByteArray>()
+        surfaceToFlowChannel = Channel()
         released.set(false)
     }
-    fun extractMpegFrames(
-        inputVideo: Uri,
-        timeInSec: List<Double>,
-        outputDir: Uri,
-        photoQuality: Int,
-        context: Context? = null
-    ): Observable<Progress> {
 
-        val startTime = System.currentTimeMillis()
-
-        val cancelable = Cancelable()
-
-        var decoder: MediaCodec? = null
-        var outputSurface: CodecOutputSurface? = null
-        var extractor: MediaExtractor? = null
-
-
-        return Observable.create { emitter ->
-
-            val outputPath = outputDir.path
-
-            val saveWidth: Int
-            val saveHeight: Int
-
-            if (emitter.isDisposed)
-                return@create
-            extractor = MediaExtractor()
-            if (inputVideo.scheme == null || inputVideo.scheme == "file") {
-                val inputFilePath = inputVideo.path
-                val inputFile = File(inputFilePath!!)   // must be an absolute path
-                // The MediaExtractor error messages aren't very useful.  Check to see if the input
-                // file exists so we can throw a better one if it's not there.
-                if (!inputFile.canRead()) {
-                    emitter.onError(FileNotFoundException("Unable to read $inputFile"))
-                }
-                extractor!!.setDataSource(inputFile.toString())
-            }else{
-                val headers = mapOf("User-Agent" to "media converter")
-                extractor!!.setDataSource(context!!, inputVideo, headers)
-            }
-
-
-
-
-            val videoTrackIndex = getTrackId(extractor!!, "video")
-            if (videoTrackIndex < 0) {
-                emitter.onError(RuntimeException("No video track found in $inputVideo"))
-            }
-            extractor!!.selectTrack(videoTrackIndex)
-
-            val format = extractor!!.getTrackFormat(videoTrackIndex)
-            val rotation = if(format.containsKey(MediaFormat.KEY_ROTATION)) format.getInteger(MediaFormat.KEY_ROTATION)
-                           else 0
-
-            saveWidth = format.getInteger(MediaFormat.KEY_WIDTH)
-            saveHeight = format.getInteger(MediaFormat.KEY_HEIGHT)
-            log(
-                "Video size is " + format.getInteger(MediaFormat.KEY_WIDTH) + "x" +
-                        format.getInteger(MediaFormat.KEY_HEIGHT)
-            )
-
-            val frameRate = format.getInteger(MediaFormat.KEY_FRAME_RATE)
-            val duration = format.getLong(MediaFormat.KEY_DURATION)
-
-            val secToMicroSec = 1000000
-            val totalFrame = (duration * frameRate / secToMicroSec).toInt()
-
-            log(
-                "Frame rate is = " + frameRate +
-                        " Total duration is in microSec = " + duration +
-                        " Total frame count = " + totalFrame
-            )
-
-            //Can't use timeStamp directly, instead we need to get which frame we need to get
-            val desiredFrames = getDesiredFrames(timeInSec, frameRate)
-
-             log("Desired frames list is $desiredFrames")
-            // Could use width/height from the MediaFormat to get full-size frames.
-            outputSurface = CodecOutputSurface(saveWidth, saveHeight)
-
-            // Create a MediaCodec decoder, and configure it with the MediaFormat from the
-            // extractor.  It's very important to use the format from the extractor because
-            // it contains a copy of the CSD-0/CSD-1 codec-specific data chunks.
-            val mime = format.getString(MediaFormat.KEY_MIME)
-            decoder = MediaCodec.createDecoderByType(mime!!)
-            decoder?.configure(format, outputSurface!!.surface, null, 0)
-            decoder?.start()
-            doExtract(
-                extractor!!,
-                videoTrackIndex,
-                decoder!!,
-                outputSurface!!,
-                desiredFrames,
-                outputPath,
-                photoQuality,
-                emitter,
-                totalFrame,
-                startTime,
-                cancelable,
-                rotation
-            )
-
-        }.doOnDispose {
-            cancelable.cancel.set(true)
-        }.doOnComplete {
-            release(outputSurface, decoder, extractor)
-        }
-    }
-
-    /**
-     * @param timeInSec = desired video frame times in sec
-     * @param frameRate = video frame rate
-     * @return list of frame numbers which points exact frame in given time
-     *
-     *
-     * While using mediaCodec we can't seek to desired time, instead of that need to figure out which frame we needed
-     * to calculate that, need to multiply desired frame time with frame rate
-     *
-     *
-     * Example = Want to get the frame at 6.34 sec. We have a 30 frame rate video
-     * 6.34*30 = 190,2 th frame -> we need int or long number so need to round it down
-     */
-    private fun getDesiredFrames(timeInSec: List<Double>, frameRate: Int): List<Int> {
-
-        val desiredFrames = ArrayList<Int>()
-
-        for (i in timeInSec.indices) {
-            val desiredTimeFrames = (timeInSec[i] * frameRate).toInt()
-            desiredFrames.add(desiredTimeFrames)
-        }
-        return desiredFrames
-    }
 
     /**
      * Selects the video track, if any.
@@ -532,7 +360,7 @@ class MediaCodecExtractImage {
     }
 
     companion object {
-        private const val TAG = "ExtractMpegFrames"
+        private const val TAG = "MediaCodecExtractImage"
     }
 
     // remove frames when the frameRate is higher than the maximum frameRate
@@ -542,11 +370,11 @@ class MediaCodecExtractImage {
             frameIds.add(i)
         }
         val MAX_FRAME_RATE = 24
-        if(frameRate <= MAX_FRAME_RATE) {
-            return frameIds
+        return if(frameRate <= MAX_FRAME_RATE) {
+            frameIds
         }else{
             val framesToDrop = frameRate - MAX_FRAME_RATE
-            return getDropFrameIdsOneRound(frameIds, framesToDrop)
+            getDropFrameIdsOneRound(frameIds, framesToDrop)
         }
     }
     private fun getDropFrameIdsOneRound(frameIds: MutableList<Int>, dropFrameCount: Int):MutableList<Int>{
@@ -569,22 +397,20 @@ class MediaCodecExtractImage {
         }
     }
     @Throws(IOException::class)
-    internal suspend fun extractOneFrame(
+    internal fun extractOneFrame(
         extractor: MediaExtractor,
         trackIndex: Int,
         decoder: MediaCodec,
         outputSurface: CodecOutputSurface,
         photoQuality: Int,
         scalePercent: Int,
-        totalFrame: Int,
-        rotation: Int,
-        frameRate: Int
+        rotation: Int
     ):ByteArray {
         val TIMEOUT_USEC = 10000
         val decoderInputBuffers = decoder.inputBuffers
         val info = MediaCodec.BufferInfo()
         var inputChunk = this.currentDecodeFrame.get()
-        var decodeCount = this.currentDecodeFrame.get()
+        val decodeCount = this.currentDecodeFrame.get()
         var inputDone = false
         var outputDone = false
         var frameArray = ByteArray(0)
@@ -701,7 +527,6 @@ class MediaCodecExtractImage {
             photoQuality: Int,
             scalePercent: Int,
             totalFrame: Int,
-            cancel: Cancelable,
             pause: Pauseable,
             rotation: Int,
             frameRate: Int
@@ -837,166 +662,6 @@ class MediaCodecExtractImage {
                     }
                 }
             }
-        }
-
-        @Throws(IOException::class)
-        internal fun doExtract(
-            extractor: MediaExtractor,
-            trackIndex: Int,
-            decoder: MediaCodec,
-            outputSurface: CodecOutputSurface,
-            desiredFrames: List<Int>,
-            outputPath: String?,
-            photoQuality: Int,
-            observer: ObservableEmitter<Progress>,
-            totalFrame: Int,
-            startTime: Long,
-            cancel: Cancelable,
-            rotation: Int
-        ) {
-            val TIMEOUT_USEC = 10000
-            val decoderInputBuffers = decoder.inputBuffers
-            val info = MediaCodec.BufferInfo()
-            var inputChunk = 0
-            var decodeCount = 0
-            var frameSaveTime: Long = 0
-            var frameCounter = 0
-
-            var outputDone = false
-            var inputDone = false
-            while (!outputDone) {
-
-                if (cancel.cancel.get()) {
-                    outputPath?.let { MediaCodecTranscoder.deleteFolder(it) }
-                    release(outputSurface, decoder, extractor)
-                    return
-                }
-//                log("loop")
-
-                // Feed more data to the decoder.
-                if (!inputDone) {
-                    val inputBufIndex = decoder.dequeueInputBuffer(TIMEOUT_USEC.toLong())
-                    if (inputBufIndex >= 0) {
-//                        log("inputBufIndex $inputBufIndex")
-
-                        val inputBuf = decoderInputBuffers[inputBufIndex]
-                        // Read the sample data into the ByteBuffer.  This neither respects nor
-                        // updates inputBuf's position, limit, etc.
-                        val chunkSize = extractor.readSampleData(inputBuf, 0)
-                        if (chunkSize < 0) {
-                            // End of stream -- send empty frame with EOS flag set.
-                            decoder.queueInputBuffer(
-                                inputBufIndex, 0, 0, 0L,
-                                MediaCodec.BUFFER_FLAG_END_OF_STREAM
-                            )
-                            inputDone = true
-                            log("sent input EOS")
-                        } else {
-                            if (extractor.sampleTrackIndex != trackIndex) {
-                                log(
-                                    "WEIRD: got sample from track " +
-                                            extractor.sampleTrackIndex + ", expected " + trackIndex
-                                )
-                            }
-
-//                            log("decode count = $decodeCount")
-
-                            val presentationTimeUs = extractor.sampleTime
-
-                            decoder.queueInputBuffer(
-                                inputBufIndex, 0, chunkSize,
-                                presentationTimeUs, 0 /*flags*/
-                            )
-
-//                            log(
-//                                "submitted frame " + inputChunk + " to dec, size=" +
-//                                        chunkSize
-//                            )
-
-                            inputChunk++
-                            extractor.advance()
-                        }
-
-                    } else {
-                        log("input buffer not available")
-                    }
-                }
-
-                if (!outputDone) {
-                    val decoderStatus = decoder.dequeueOutputBuffer(info, TIMEOUT_USEC.toLong())
-                    if (decoderStatus == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                        // no output available yet
-                        log("no output from decoder available")
-                    } else if (decoderStatus == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED) {
-                        // not important for us, since we're using Surface
-                        log("decoder output buffers changed")
-                    } else if (decoderStatus == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                        val newFormat = decoder.outputFormat
-                        log("decoder output format changed: $newFormat")
-                    } else if (decoderStatus < 0) {
-                        //fail("unexpected result from decoder.dequeueOutputBuffer: " + decoderStatus);
-                    } else { // decoderStatus >= 0
-//                        log(
-//                            "surface decoder given buffer " + decoderStatus +
-//                                    " (size=" + info.size + ")"
-//                        )
-                        if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
-                            log("output EOS")
-                            outputDone = true
-                        }
-
-                        val doRender = info.size != 0
-
-                        // As soon as we call releaseOutputBuffer, the buffer will be forwarded
-                        // to SurfaceTexture to convert to a texture.  The API doesn't guarantee
-                        // that the texture will be available before the call returns, so we
-                        // need to wait for the onFrameAvailable callback to fire.
-                        decoder.releaseOutputBuffer(decoderStatus, doRender)
-                        if (doRender) {
-//                            log("awaiting decode of frame $decodeCount")
-
-                            if (desiredFrames.contains(decodeCount)) {
-                                outputSurface.awaitNewImage()
-                                outputSurface.drawImage(rotation)
-                                val outputFile = File(
-                                    outputPath,
-                                    String.format("frame-%03d.jpg", frameCounter)
-                                )
-                                val startWhen = System.nanoTime()
-                                outputSurface.saveFrame(outputFile.toString(), photoQuality)
-                                frameSaveTime += System.nanoTime() - startWhen
-                                frameCounter++
-
-//                                log("saving frames $decodeCount")
-
-                                observer.onNext(
-                                    Progress(
-                                        (decodeCount.toFloat() / totalFrame.toFloat() * 100).toInt(),
-                                        null,
-                                        Uri.parse(outputFile.absolutePath),
-                                        System.currentTimeMillis() - startTime
-                                    )
-                                )
-
-                            }
-                            if (decodeCount < totalFrame) {
-                                decodeCount++
-                            }
-                        }
-                    }
-                }
-            }
-
-            observer.onNext(
-                Progress(
-                    (decodeCount.toFloat() / totalFrame.toFloat() * 100).toInt(),
-                    "total saved frame = $frameCounter",
-                    Uri.parse(outputPath),
-                    System.currentTimeMillis() - startTime
-                )
-            )
-
-            observer.onComplete()
         }
 
     private fun release(

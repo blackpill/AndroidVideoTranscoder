@@ -15,28 +15,6 @@ object MediaCodecTranscoder {
     private val videoExtractor = MediaCodecExtractImage()
     private val audioExtractor = MediaCodecExtractAudio()
 
-    fun extractFramesFromVideo(
-        context: Context,
-        frameTimes: List<Double>,
-        inputVideo: Uri,
-        id: String,
-        outputDir: Uri?,
-        @IntRange(from = 1, to = 100) photoQuality: Int = 100
-    ): Observable<Progress> {
-        val mediaCodec = MediaCodecExtractImage()
-
-        val internalStoragePath: String = context.filesDir.absolutePath
-        val startTime = System.currentTimeMillis()
-
-        val localSavePath = "${outputDir ?: "$internalStoragePath/postProcess/$id/$startTime/"}"
-
-        //create new folder
-        val file = File(localSavePath)
-        if (!file.exists())
-            file.mkdirs()
-
-        return mediaCodec.extractMpegFrames(inputVideo, frameTimes, Uri.parse(localSavePath), photoQuality, context)
-    }
     fun getCurrentTime():Double{
         return videoExtractor.currentTime
     }
@@ -58,7 +36,12 @@ object MediaCodecTranscoder {
         videoEndTime: Double = (-1).toDouble(),
         loop: Boolean = true
     ): Flow<ByteArray> {
-        return videoExtractor.extractMpegFramesToFlow(inputVideo, photoQuality, context, scalePercent, videoEndTime, loop)
+        return videoExtractor.extractMpegFramesToFlow(
+            inputVideo,
+            photoQuality,
+            context,
+            scalePercent
+        )
     }
     fun getMetaInfo(
         context: Context,
@@ -66,15 +49,7 @@ object MediaCodecTranscoder {
     ): JSONObject {
         return videoExtractor.getMetaInfo(inputVideo, context)
     }
-    fun extractAudioFromVideoToFlow(
-        context: Context,
-        inputVideo: Uri,
-        audioStartTime: Double = 0.0,
-        audioEndTime: Double = (-1).toDouble(),
-        loop: Boolean = true
-    ): Flow<ByteArray> {
-        return audioExtractor.extractAudioToFlow(inputVideo, context, audioStartTime, loop)
-    }
+
     fun extractAudioFromVideoToStream(
         context: Context,
         inputVideo: Uri,
