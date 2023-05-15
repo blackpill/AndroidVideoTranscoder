@@ -58,8 +58,8 @@ object MediaCodecTranscoder {
     ): InputStream {
         return audioExtractor.extractAudioToStream(inputVideo, context)
     }
-    fun pause() {
-        videoExtractor.pause()
+    fun pause(pauseTime: Double) {
+        videoExtractor.pause(pauseTime)
     }
     fun cancel() {
         videoExtractor.cancel()

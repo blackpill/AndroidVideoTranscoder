@@ -33,6 +33,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.locks.ReentrantLock
 
 
 //20131122: minor tweaks to saveFrame() I/O
@@ -60,6 +61,7 @@ class MediaCodecExtractImage {
     //private var decoder: MediaCodec? = null
     //private lateinit var outputSurface: CodecOutputSurface
     private var extractor = MediaExtractor()
+    private val extractorLock = ReentrantLock()
     private var videoTrackIndex = -1
     private val pauseable = Pauseable()
     private val cancelable = Cancelable()
@@ -78,6 +80,7 @@ class MediaCodecExtractImage {
 
     //MediaExtractor must be initialed and released manually
     private fun initExtractor(inputVideo: Uri, context: Context?){
+        extractorLock.lock()
         extractor = MediaExtractor()
         if (inputVideo.scheme == null || inputVideo.scheme == "file") {
             val inputFilePath = inputVideo.path
@@ -98,8 +101,9 @@ class MediaCodecExtractImage {
         }
         extractor.selectTrack(videoTrackIndex) // only take effect once
     }
-    fun pause(){
+    fun pause(pauseTime: Double){
         pauseable.pause.set(true)
+        currentTime = pauseTime
     }
 
     fun setReleasedLatch(){
@@ -119,6 +123,7 @@ class MediaCodecExtractImage {
         inputVideo: Uri,
         context: Context? = null,
     ): JSONObject {
+        Log.d("HK_EXT", "getMetaInfo extractor inited")
         initExtractor(inputVideo, context)
 
         val format = extractor.getTrackFormat(videoTrackIndex)
@@ -132,11 +137,14 @@ class MediaCodecExtractImage {
             "Video size is " + format.getInteger(MediaFormat.KEY_WIDTH) + "x" +
                     format.getInteger(MediaFormat.KEY_HEIGHT)
         )
-
-        val frameRate = format.getInteger(MediaFormat.KEY_FRAME_RATE)
-        val duration = format.getLong(MediaFormat.KEY_DURATION)
-        val valuePacket = JSONObject()
         val MAX_FRAME_RATE = 24
+        val DEFAULT_FRAME_RATE = 30
+        val frameRate = if (format.containsKey(MediaFormat.KEY_FRAME_RATE)) format.getInteger(MediaFormat.KEY_FRAME_RATE)
+                        else DEFAULT_FRAME_RATE
+        val duration = if (format.containsKey(MediaFormat.KEY_DURATION)) format.getLong(MediaFormat.KEY_DURATION)
+                       else 0L
+        val valuePacket = JSONObject()
+
         val adjustedFrameRate = if(frameRate > MAX_FRAME_RATE) MAX_FRAME_RATE
                                 else frameRate
 
@@ -145,6 +153,8 @@ class MediaCodecExtractImage {
         valuePacket.put("videoWidth", videoWidth)
         valuePacket.put("videoHeight", videoHeight)
         extractor.release()
+        if(extractorLock.isLocked) extractorLock.unlock()
+        Log.d("HK_EXT", "getMetaInfo extractor released")
         return valuePacket
     }
     /**
@@ -165,6 +175,7 @@ class MediaCodecExtractImage {
     ): ByteArray {
         Log.d("worker", "releasedLatch.await() start")
         releasedLatch.await()
+        Log.d("HK_EXT", "seekone extractor inited")
         initExtractor(inputVideo, context)
         Log.d("worker", "releasedLatch.await() passed")
         currentTime = videoStartTime
@@ -185,13 +196,15 @@ class MediaCodecExtractImage {
                 "Video size is " + format.getInteger(MediaFormat.KEY_WIDTH) + "x" +
                         format.getInteger(MediaFormat.KEY_HEIGHT)
             )
-
-            val frameRate = format.getInteger(MediaFormat.KEY_FRAME_RATE)
-
-            val duration = format.getLong(MediaFormat.KEY_DURATION)
+            val DEFAULT_FRAME_RATE = 30
+            val frameRate = if (format.containsKey(MediaFormat.KEY_FRAME_RATE)) format.getInteger(MediaFormat.KEY_FRAME_RATE)
+                            else DEFAULT_FRAME_RATE
+            val duration = if (format.containsKey(MediaFormat.KEY_DURATION)) format.getLong(MediaFormat.KEY_DURATION)
+                            else 0L
 
             val secToMicroSec = 1000000
-            val totalFrame = (duration * frameRate / secToMicroSec).toInt()
+            val totalFrame = if(duration == 0L) 0
+                             else (duration * frameRate / secToMicroSec).toInt()
             val realStartTime: Long =
                 if (videoStartTime > 0.01) (videoStartTime * secToMicroSec).toLong()
                 else this@MediaCodecExtractImage.currentDecodeFrame.get() * secToMicroSec.toLong() / frameRate
@@ -225,6 +238,8 @@ class MediaCodecExtractImage {
                 rotation
             )
             release(outputSurface, decoder, extractor)
+            Log.d("HK_EXT", "seekone extractor released")
+
         }
         return frameArray
     }
@@ -238,14 +253,16 @@ class MediaCodecExtractImage {
         Log.d("worker", "releasedLatch.await() start")
         releasedLatch.await()
         Log.d("worker", "releasedLatch.await() passed")
-        initExtractor(inputVideo, context)
+        Log.d("HK_EXT", "while extractor inited")
         var decoder: MediaCodec? = null
 //        var extractor: MediaExtractor? = null
         var outputSurface: CodecOutputSurface? = null
         released.getAndSet(false)
+        pauseable.pause.set(false)
+        cancelable.cancel.set(false)
         coroutineScope.launch {
-            pauseable.pause.set(false)
-            cancelable.cancel.set(false)
+            Log.d("HK_EXT", "While init Thread is = " + Thread.currentThread())
+            initExtractor(inputVideo, context)
             val format = extractor.getTrackFormat(videoTrackIndex)
             val rotation = if (format.containsKey(MediaFormat.KEY_ROTATION)) format.getInteger((MediaFormat.KEY_ROTATION))
             else 0
@@ -258,12 +275,15 @@ class MediaCodecExtractImage {
                         format.getInteger(MediaFormat.KEY_HEIGHT)
             )
 
-            val frameRate = format.getInteger(MediaFormat.KEY_FRAME_RATE)
-
-            val duration = format.getLong(MediaFormat.KEY_DURATION)
+            val DEFAULT_FRAME_RATE = 30
+            val frameRate = if (format.containsKey(MediaFormat.KEY_FRAME_RATE)) format.getInteger(MediaFormat.KEY_FRAME_RATE)
+                            else DEFAULT_FRAME_RATE
+            val duration = if (format.containsKey(MediaFormat.KEY_DURATION)) format.getLong(MediaFormat.KEY_DURATION)
+                            else 0L
 
             val secToMicroSec = 1000000
-            val totalFrame = (duration * frameRate / secToMicroSec).toInt()
+            val totalFrame = if(duration == 0L) 0
+                            else (duration * frameRate / secToMicroSec).toInt()
             val realStartTime: Long =
                 if (currentTime > 0.01) (currentTime * secToMicroSec).toLong()
                 else this@MediaCodecExtractImage.currentDecodeFrame.get() * secToMicroSec.toLong() / frameRate
@@ -317,7 +337,8 @@ class MediaCodecExtractImage {
                 }
             }
         }.onCompletion {
-            release(outputSurface, decoder, extractor)
+            release(outputSurface, decoder, extractor, eglDispatcher)
+            Log.d("HK_EXT", "while extractor released")
             reset()
         }
     }
@@ -654,7 +675,7 @@ class MediaCodecExtractImage {
 
                             log("saving frames $decodeCount")
 
-                            if (decodeCount < totalFrame) {
+                            if (decodeCount < totalFrame || totalFrame == 0) {
                                 decodeCount++
                                 this.currentDecodeFrame.incrementAndGet()
                             }
@@ -662,18 +683,30 @@ class MediaCodecExtractImage {
                     }
                 }
             }
+            Log.d("HK_EXT", "while exited, pause = " + pause.pause.get())
         }
 
     private fun release(
         outputSurface: CodecOutputSurface?,
         decoder: MediaCodec?,
-        extractor: MediaExtractor?
+        extractor: MediaExtractor?,
+        dispatcher: ExecutorCoroutineDispatcher? = null
     ) {
         if(!released.getAndSet(true)) {
             outputSurface?.release()
             decoder?.stop()
             decoder?.release()
             extractor?.release()
+            Log.d("HK_EXT", "extractor really released in Thread " + Thread.currentThread())
+            if(dispatcher != null) {
+                runBlocking(eglDispatcher) {
+                    Log.d("HK_EXT", "While release Thread is = " + Thread.currentThread())
+                    if (extractorLock.isLocked) extractorLock.unlock()
+                }
+            }else{
+                Log.d("HK_EXT", "While release Thread is = " + Thread.currentThread())
+                if (extractorLock.isLocked) extractorLock.unlock()
+            }
             cancelable.cancel.set(false)
             releasedLatch.countDown()
             Log.d("worker", "releasedLatch set 0")
