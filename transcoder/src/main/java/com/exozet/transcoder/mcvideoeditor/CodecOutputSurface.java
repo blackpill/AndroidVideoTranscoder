@@ -228,8 +228,10 @@ import static com.exozet.transcoder.ffmpeg.DebugExtensions.log;
         }
 
         // Latch the data.
-        mTextureRender.checkGlError("before updateTexImage");
-        mSurfaceTexture.updateTexImage();
+        if(mTextureRender != null) {
+            mTextureRender.checkGlError("before updateTexImage");
+            mSurfaceTexture.updateTexImage();
+        }
     }
 
     /**
@@ -237,7 +239,9 @@ import static com.exozet.transcoder.ffmpeg.DebugExtensions.log;
      *
      */
     public void drawImage(int rotation) {
-        mTextureRender.drawFrame(mSurfaceTexture, rotation);
+        if(mTextureRender != null) {
+            mTextureRender.drawFrame(mSurfaceTexture, rotation);
+        }
     }
 
     // SurfaceTexture callback
@@ -341,25 +345,27 @@ import static com.exozet.transcoder.ffmpeg.DebugExtensions.log;
     // Allocating large buffers is expensive, so we really want mPixelBuf to be
     // allocated ahead of time if possible.  We still get some allocations from the
     // Bitmap / PNG creation.
-
-    mPixelBuf.rewind();
-    GLES20.glReadPixels(0, 0, mWidth, mHeight, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE,
-            mPixelBuf);
-
-    ByteArrayOutputStream bos = null;
     byte[] result = null;
-    try {
-        bos = new ByteArrayOutputStream();
-        Bitmap bmp = Bitmap.createBitmap(mWidth, mHeight, Bitmap.Config.ARGB_8888);
+    if(mPixelBuf != null) {
         mPixelBuf.rewind();
-        bmp.copyPixelsFromBuffer(mPixelBuf);
-        Bitmap resizeBmp = Bitmap.createScaledBitmap(bmp, bmp.getWidth() * scale / 100, bmp.getHeight() * scale / 100, false);
-        resizeBmp.compress(Bitmap.CompressFormat.JPEG, photoQuality, bos);
-        result = bos.toByteArray();
-        bmp.recycle();
-        resizeBmp.recycle();
-    } finally {
-        if (bos != null) bos.close();
+        GLES20.glReadPixels(0, 0, mWidth, mHeight, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE,
+                mPixelBuf);
+
+        ByteArrayOutputStream bos = null;
+
+        try {
+            bos = new ByteArrayOutputStream();
+            Bitmap bmp = Bitmap.createBitmap(mWidth, mHeight, Bitmap.Config.ARGB_8888);
+            mPixelBuf.rewind();
+            bmp.copyPixelsFromBuffer(mPixelBuf);
+            Bitmap resizeBmp = Bitmap.createScaledBitmap(bmp, bmp.getWidth() * scale / 100, bmp.getHeight() * scale / 100, false);
+            resizeBmp.compress(Bitmap.CompressFormat.JPEG, photoQuality, bos);
+            result = bos.toByteArray();
+            bmp.recycle();
+            resizeBmp.recycle();
+        } finally {
+            if (bos != null) bos.close();
+        }
     }
     return result;
 }

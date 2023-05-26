@@ -130,9 +130,11 @@ class MediaCodecExtractAudio {
                     val sampleSize = mediaExtractor.readSampleData(this.samplePacketBuffer!!, 0)
                     if (sampleSize >= 0) {
                         val trackFormat = mediaExtractor.getTrackFormat(audioTrackIndex)
-                        val aacProfile = trackFormat.getInteger(MediaFormat.KEY_AAC_PROFILE)
+
                         val sampleRate = trackFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
                         val channelCount = trackFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+                        val aacProfile = if(trackFormat.containsKey(MediaFormat.KEY_AAC_PROFILE)) trackFormat.getInteger(MediaFormat.KEY_AAC_PROFILE)
+                                         else 2
                         val adtsArray = ByteArray(7)
                         mergedPacketSize = sampleSize + 7
                         addADTStoPacket(adtsArray, mergedPacketSize, aacProfile, sampleRate, channelCount)

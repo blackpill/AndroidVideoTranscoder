@@ -21,27 +21,31 @@ object MediaCodecTranscoder {
     fun seekAndFetchOneFrame(
         context: Context,
         inputVideo: Uri,
-        @IntRange(from = 1, to = 100) photoQuality: Int = 100,
-        @IntRange(from = 1, to = 100) scalePercent: Int = 100,
         seekTime: Double = (-1).toDouble(),
     ):ByteArray{
         audioExtractor.seek(seekTime)
-        return videoExtractor.seekAndFetchOneFrame(inputVideo, photoQuality, context, scalePercent, seekTime)
+        return videoExtractor.seekAndFetchOneFrame(inputVideo, context, seekTime)
     }
     fun extractFramesFromVideoToFlow(
         context: Context,
         inputVideo: Uri,
-        @IntRange(from = 1, to = 100) photoQuality: Int = 100,
         @IntRange(from = 1, to = 100) scalePercent: Int = 100,
         videoEndTime: Double = (-1).toDouble(),
         loop: Boolean = true
     ): Flow<ByteArray> {
         return videoExtractor.extractMpegFramesToFlow(
             inputVideo,
-            photoQuality,
-            context,
-            scalePercent
+            context
         )
+    }
+    fun qualityChange(delta: Int){
+        videoExtractor.qualityChange(delta)
+    }
+    fun setScalePercent(scale: Int){
+        videoExtractor.setScalePercent(scale)
+    }
+    fun setInitScalePercent(scale: Int){
+        videoExtractor.setInitScalePercent(scale)
     }
     fun getMetaInfo(
         context: Context,
@@ -67,6 +71,9 @@ object MediaCodecTranscoder {
 
     fun setReleasedLatch() {
         videoExtractor.setReleasedLatch()
+    }
+    fun setOutputDoneCallback(callback: () -> Unit) {
+        videoExtractor.setOutputDoneCallback { callback }
     }
 
     fun createVideoFromFrames(

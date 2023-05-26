@@ -58,6 +58,8 @@ import java.util.concurrent.locks.ReentrantLock
  * currently part of CTS.)
  */
 class MediaCodecExtractImage {
+    private val DEFAULT_PHOTO_QUALITY = 90
+    private val DEFAULT_SCALE_PERCENT = 60
     //private var decoder: MediaCodec? = null
     //private lateinit var outputSurface: CodecOutputSurface
     private var extractor = MediaExtractor()
@@ -69,6 +71,7 @@ class MediaCodecExtractImage {
     private var releasedLatch = CountDownLatch(0)
     private val coroutineExceptionHandler = CoroutineExceptionHandler { _, throwable ->
 //        XLog.e(getLog("onCoroutineException"), throwable)
+        throwable.printStackTrace()
         Log.e("MediaCodecExtractImages", throwable.toString())
     }
     private val eglDispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
@@ -80,6 +83,7 @@ class MediaCodecExtractImage {
 
     //MediaExtractor must be initialed and released manually
     private fun initExtractor(inputVideo: Uri, context: Context?){
+        if(extractorLock.isLocked) extractorLock.unlock()
         extractorLock.lock()
         extractor = MediaExtractor()
         if (inputVideo.scheme == null || inputVideo.scheme == "file") {
@@ -123,39 +127,55 @@ class MediaCodecExtractImage {
         inputVideo: Uri,
         context: Context? = null,
     ): JSONObject {
-        Log.d("HK_EXT", "getMetaInfo extractor inited")
-        initExtractor(inputVideo, context)
+        return runBlocking(eglDispatcher) {
+            Log.d("HK_EXT", "getMetaInfo extractor inited")
+            initExtractor(inputVideo, context)
 
-        val format = extractor.getTrackFormat(videoTrackIndex)
-        val rotation = if (format.containsKey(MediaFormat.KEY_ROTATION)) format.getInteger((MediaFormat.KEY_ROTATION))
-                       else 0
-        val videoWidth = if(rotation == 90 || rotation == 270) format.getInteger(MediaFormat.KEY_HEIGHT)
-                         else format.getInteger(MediaFormat.KEY_WIDTH)
-        val videoHeight = if(rotation == 90 || rotation == 270) format.getInteger(MediaFormat.KEY_WIDTH)
-                          else format.getInteger(MediaFormat.KEY_HEIGHT)
-        log(
-            "Video size is " + format.getInteger(MediaFormat.KEY_WIDTH) + "x" +
-                    format.getInteger(MediaFormat.KEY_HEIGHT)
-        )
-        val MAX_FRAME_RATE = 24
-        val DEFAULT_FRAME_RATE = 30
-        val frameRate = if (format.containsKey(MediaFormat.KEY_FRAME_RATE)) format.getInteger(MediaFormat.KEY_FRAME_RATE)
-                        else DEFAULT_FRAME_RATE
-        val duration = if (format.containsKey(MediaFormat.KEY_DURATION)) format.getLong(MediaFormat.KEY_DURATION)
-                       else 0L
-        val valuePacket = JSONObject()
+            val format = extractor.getTrackFormat(videoTrackIndex)
+            val rotation =
+                if (format.containsKey(MediaFormat.KEY_ROTATION)) format.getInteger((MediaFormat.KEY_ROTATION))
+                else 0
+            val videoWidth =
+                if (rotation == 90 || rotation == 270) format.getInteger(MediaFormat.KEY_HEIGHT)
+                else format.getInteger(MediaFormat.KEY_WIDTH)
+            val videoHeight =
+                if (rotation == 90 || rotation == 270) format.getInteger(MediaFormat.KEY_WIDTH)
+                else format.getInteger(MediaFormat.KEY_HEIGHT)
+            log(
+                "Video size is " + format.getInteger(MediaFormat.KEY_WIDTH) + "x" +
+                        format.getInteger(MediaFormat.KEY_HEIGHT)
+            )
+            val MAX_FRAME_RATE = 24
+            val DEFAULT_FRAME_RATE = 30
+            val frameRate =
+                if (format.containsKey(MediaFormat.KEY_FRAME_RATE)) format.getInteger(MediaFormat.KEY_FRAME_RATE)
+                else DEFAULT_FRAME_RATE
+            val duration =
+                if (format.containsKey(MediaFormat.KEY_DURATION)) format.getLong(MediaFormat.KEY_DURATION)
+                else 0L
+            val valuePacket = JSONObject()
 
-        val adjustedFrameRate = if(frameRate > MAX_FRAME_RATE) MAX_FRAME_RATE
-                                else frameRate
+            val adjustedFrameRate = if (frameRate > MAX_FRAME_RATE) MAX_FRAME_RATE
+            else frameRate
 
-        valuePacket.put("duration", duration)
-        valuePacket.put("frameRate", adjustedFrameRate)
-        valuePacket.put("videoWidth", videoWidth)
-        valuePacket.put("videoHeight", videoHeight)
-        extractor.release()
-        if(extractorLock.isLocked) extractorLock.unlock()
-        Log.d("HK_EXT", "getMetaInfo extractor released")
-        return valuePacket
+            valuePacket.put("duration", duration)
+            valuePacket.put("frameRate", adjustedFrameRate)
+            valuePacket.put("uri", inputVideo.toString())
+            valuePacket.put("videoWidth", videoWidth)
+            valuePacket.put("videoHeight", videoHeight)
+            extractor.release()
+            if (extractorLock.isLocked) extractorLock.unlock()
+            Log.d("HK_EXT", "getMetaInfo extractor released")
+            valuePacket
+        }
+    }
+    private fun calcScaledSize(size: Int): Int{
+        val newSize:Int = size * initScalePercent.get() / 100
+        if(newSize % 2 == 0){
+            return newSize
+        }else{
+            return newSize + 1
+        }
     }
     /**
      * Tests extraction from an MP4 to a series of PNG files.
@@ -168,24 +188,31 @@ class MediaCodecExtractImage {
      */
     fun seekAndFetchOneFrame(
         inputVideo: Uri,
-        photoQuality: Int,
         context: Context? = null,
-        scalePercent: Int = 100,
         videoStartTime: Double = 0.0
     ): ByteArray {
         Log.d("worker", "releasedLatch.await() start")
         releasedLatch.await()
-        Log.d("HK_EXT", "seekone extractor inited")
-        initExtractor(inputVideo, context)
-        Log.d("worker", "releasedLatch.await() passed")
-        currentTime = videoStartTime
-        var decoder: MediaCodec?
-//        var extractor: MediaExtractor? = null
-        var outputSurface: CodecOutputSurface?
-        var frameArray: ByteArray
-        released.getAndSet(false)
-        runBlocking {
+        return runBlocking(eglDispatcher) {
+            Log.d("HK_EXT", "seekone extractor inited")
+            initExtractor(inputVideo, context)
+            Log.d("worker", "releasedLatch.await() passed")
+            currentTime = videoStartTime
+            val decoder: MediaCodec?
+    //        var extractor: MediaExtractor? = null
+            val outputSurface: CodecOutputSurface?
+            val frameArray: ByteArray
+            released.getAndSet(false)
+
             val format = extractor.getTrackFormat(videoTrackIndex)
+//            if (format.containsKey("display-width")){
+//                format.setInteger("display-width", format.getInteger("display-width") * scalePercent.get() / 100)
+//            }
+//            if (format.containsKey("display-height")){
+//                format.setInteger("display-height", format.getInteger("display-height") * scalePercent.get() / 100)
+//            }
+            format.setInteger(MediaFormat.KEY_WIDTH, calcScaledSize(format.getInteger(MediaFormat.KEY_WIDTH)))
+            format.setInteger(MediaFormat.KEY_HEIGHT, calcScaledSize(format.getInteger(MediaFormat.KEY_HEIGHT)))
             val rotation = if (format.containsKey(MediaFormat.KEY_ROTATION)) format.getInteger((MediaFormat.KEY_ROTATION))
             else 0
             val saveWidth = if(rotation == 90 || rotation == 270) format.getInteger(MediaFormat.KEY_HEIGHT)
@@ -217,38 +244,59 @@ class MediaCodecExtractImage {
 
             // Could use width/height from the MediaFormat to get full-size frames.
             outputSurface = CodecOutputSurface(saveWidth, saveHeight)
-            val surface = outputSurface?.surface
+            val surface = outputSurface.surface
 
             // Create a MediaCodec decoder, and configure it with the MediaFormat from the
             // extractor.  It's very important to use the format from the extractor because
             // it contains a copy of the CSD-0/CSD-1 codec-specific data chunks.
             val mime = format.getString(MediaFormat.KEY_MIME)
             decoder = MediaCodec.createDecoderByType(mime!!)
-            decoder?.configure(format, surface, null, 0)
-            decoder?.start()
+            decoder.configure(format, surface, null, 0)
+            decoder.start()
             //NOTE: outputSurface should not be in flow, when switch thread, the EGLContext will change.
             //So I use a channel in Flow to receive and emit data
             frameArray = extractOneFrame(
                 extractor,
                 videoTrackIndex,
-                decoder!!,
-                outputSurface!!,
-                photoQuality,
-                scalePercent,
+                decoder,
+                outputSurface,
                 rotation
             )
             release(outputSurface, decoder, extractor)
             Log.d("HK_EXT", "seekone extractor released")
-
+            frameArray
         }
-        return frameArray
+    }
+    private var photoQuality = AtomicInteger(DEFAULT_PHOTO_QUALITY)
+    private var scalePercent = AtomicInteger(DEFAULT_SCALE_PERCENT)
+    private var initScalePercent = AtomicInteger(DEFAULT_SCALE_PERCENT)
+    fun setScalePercent(scale: Int){
+        val tempScale = if(scale > 100) 100
+                        else if(scale < 1) 1
+                        else scale
+        scalePercent.set(tempScale)
+    }
+    fun setInitScalePercent(scale: Int){
+        val tempScale = if(scale > 100) 100
+        else if(scale < 1) 1
+        else scale
+        initScalePercent.set(tempScale)
+    }
+    fun qualityChange(delta: Int){
+        if(delta != 0){
+            val tempQuality = photoQuality.get() + delta
+            val finalQuality = when{
+                tempQuality > 100 -> 100
+                tempQuality < 10 -> 10
+                else -> tempQuality
+            }
+            photoQuality.set(finalQuality)
+        }
     }
     @OptIn(ExperimentalCoroutinesApi::class)
     fun extractMpegFramesToFlow(
         inputVideo: Uri,
-        photoQuality: Int,
-        context: Context? = null,
-        scalePercent: Int = 100
+        context: Context? = null
     ): Flow<ByteArray> {
         Log.d("worker", "releasedLatch.await() start")
         releasedLatch.await()
@@ -264,6 +312,14 @@ class MediaCodecExtractImage {
             Log.d("HK_EXT", "While init Thread is = " + Thread.currentThread())
             initExtractor(inputVideo, context)
             val format = extractor.getTrackFormat(videoTrackIndex)
+//            if (format.containsKey("display-width")){
+//                format.setInteger("display-width", format.getInteger("display-width") * scalePercent.get() / 100)
+//            }
+//            if (format.containsKey("display-height")){
+//                format.setInteger("display-height", format.getInteger("display-height") * scalePercent.get() / 100)
+//            }
+            format.setInteger(MediaFormat.KEY_WIDTH, calcScaledSize(format.getInteger(MediaFormat.KEY_WIDTH)))
+            format.setInteger(MediaFormat.KEY_HEIGHT, calcScaledSize(format.getInteger(MediaFormat.KEY_HEIGHT)))
             val rotation = if (format.containsKey(MediaFormat.KEY_ROTATION)) format.getInteger((MediaFormat.KEY_ROTATION))
             else 0
             val saveWidth = if(rotation == 90 || rotation == 270) format.getInteger(MediaFormat.KEY_HEIGHT)
@@ -312,8 +368,6 @@ class MediaCodecExtractImage {
                 videoTrackIndex,
                 decoder!!,
                 outputSurface!!,
-                photoQuality,
-                scalePercent,
                 totalFrame,
                 pauseable,
                 rotation,
@@ -350,6 +404,7 @@ class MediaCodecExtractImage {
         outputDone = false
         surfaceToFlowChannel = Channel()
         released.set(false)
+        photoQuality.set(DEFAULT_PHOTO_QUALITY)
     }
 
 
@@ -423,8 +478,6 @@ class MediaCodecExtractImage {
         trackIndex: Int,
         decoder: MediaCodec,
         outputSurface: CodecOutputSurface,
-        photoQuality: Int,
-        scalePercent: Int,
         rotation: Int
     ):ByteArray {
         val TIMEOUT_USEC = 10000
@@ -525,8 +578,8 @@ class MediaCodecExtractImage {
                         log("drawImage passed: $decodeCount")
                         try {
                             frameArray = outputSurface.frameToArray(
-                                    photoQuality,
-                                    scalePercent
+                                    photoQuality.get(),
+                                    100
                                 )
                             outputDone = true
                             log("surfaceToFlowChannel sent: $decodeCount")
@@ -539,14 +592,16 @@ class MediaCodecExtractImage {
         }
         return frameArray
     }
+    private lateinit var outputDoneCallback: ()->Unit
+    fun setOutputDoneCallback(callback: () -> Unit) {
+        outputDoneCallback = callback
+    }
         @Throws(IOException::class)
         internal suspend fun doExtractToFlow(
             extractor: MediaExtractor,
             trackIndex: Int,
             decoder: MediaCodec,
             outputSurface: CodecOutputSurface,
-            photoQuality: Int,
-            scalePercent: Int,
             totalFrame: Int,
             pause: Pauseable,
             rotation: Int,
@@ -640,10 +695,7 @@ class MediaCodecExtractImage {
                             "surface decoder given buffer " + decoderStatus +
                                     " (size=" + info.size + ")"
                         )
-                        if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
-                            log("output EOS")
-                            outputDone = true
-                        }
+
 
                         val doRender = info.size != 0
 
@@ -660,11 +712,12 @@ class MediaCodecExtractImage {
                             if(frameIds.size == frameRate || frameIds.contains(decodeCount % frameRate)) {
                                 outputSurface.drawImage(rotation)
                                 log("drawImage passed: $decodeCount")
+                                Log.d("TIME", "surfaceToFlowChannel.send $decodeCount at " + System.currentTimeMillis())
                                 try {
                                     surfaceToFlowChannel.send(
                                         outputSurface.frameToArray(
-                                            photoQuality,
-                                            scalePercent
+                                            photoQuality.get(),
+                                            scalePercent.get() * 100 / initScalePercent.get()
                                         )
                                     )
                                     log("surfaceToFlowChannel sent: $decodeCount")
@@ -680,37 +733,51 @@ class MediaCodecExtractImage {
                                 this.currentDecodeFrame.incrementAndGet()
                             }
                         }
+                        if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                            log("output EOS")
+                            outputDone = true
+                            outputDoneCallback.invoke()
+                        }
                     }
                 }
             }
             Log.d("HK_EXT", "while exited, pause = " + pause.pause.get())
         }
 
+    private fun doRelease(
+        outputSurface: CodecOutputSurface?,
+        decoder: MediaCodec?,
+        extractor: MediaExtractor?,
+        dispatcher: ExecutorCoroutineDispatcher? = null
+    ) {
+        outputSurface?.release()
+        decoder?.stop()
+        decoder?.release()
+        extractor?.release()
+        Log.d("HK_EXT", "extractor really released in Thread " + Thread.currentThread())
+        Log.d("HK_EXT", "While release Thread is = " + Thread.currentThread())
+        if (extractorLock.isLocked) extractorLock.unlock()
+    }
     private fun release(
         outputSurface: CodecOutputSurface?,
         decoder: MediaCodec?,
         extractor: MediaExtractor?,
         dispatcher: ExecutorCoroutineDispatcher? = null
     ) {
-        if(!released.getAndSet(true)) {
-            outputSurface?.release()
-            decoder?.stop()
-            decoder?.release()
-            extractor?.release()
-            Log.d("HK_EXT", "extractor really released in Thread " + Thread.currentThread())
+        if(!released.get()) {
             if(dispatcher != null) {
                 runBlocking(eglDispatcher) {
-                    Log.d("HK_EXT", "While release Thread is = " + Thread.currentThread())
-                    if (extractorLock.isLocked) extractorLock.unlock()
+                    doRelease(outputSurface, decoder, extractor, dispatcher)
                 }
             }else{
-                Log.d("HK_EXT", "While release Thread is = " + Thread.currentThread())
-                if (extractorLock.isLocked) extractorLock.unlock()
+                doRelease(outputSurface, decoder, extractor, dispatcher)
             }
             cancelable.cancel.set(false)
             releasedLatch.countDown()
+            released.set(true)
             Log.d("worker", "releasedLatch set 0")
-
+        }else{
+            Log.d("worker", "decoder already released")
         }
     }
 }
