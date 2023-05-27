@@ -52,7 +52,7 @@ class MediaCodecExtractAudio {
     private var audioTrackIndex = -1
 
     fun seek(time:Double) {
-        seekTime = time
+//        seekTime = time
     }
 
     fun extractAudioToStream(inputVideo: Uri, context: Context?): InputStream {
@@ -85,8 +85,9 @@ class MediaCodecExtractAudio {
                     val mimeType = trackFormat.getString(MediaFormat.KEY_MIME)
                     if (mimeType?.startsWith("audio/") == true) {
                         audioTrackIndex = i
-                        samplePacketBuffer = ByteBuffer.allocate(trackFormat.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE))
-                        sampleBufferSize = trackFormat.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE)
+                        sampleBufferSize = if(trackFormat.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)) trackFormat.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE)
+                                           else 64 * 1024
+                        samplePacketBuffer = ByteBuffer.allocate(sampleBufferSize)
                         extractor.selectTrack(audioTrackIndex)
                         break
                     }
